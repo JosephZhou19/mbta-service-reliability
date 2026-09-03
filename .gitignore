@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+.DS_Store
+
+# Pipeline reference-table cache — regenerable from source (LAMP), large over time
+backend/data/ref_cache/
