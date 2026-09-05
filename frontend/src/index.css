@@ -234,28 +234,67 @@ a {
   font-weight: 600;
 }
 
-/* Closure list */
-.closure-list {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
+/* ServiceCalendar */
+.service-calendar {
+  max-width: 100%;
+  overflow-x: auto;
 }
 
-.closure-list li {
+.service-calendar-months {
+  position: relative;
+  height: 14px;
+  font-size: 0.7rem;
+  color: var(--text-muted);
+}
+
+.service-calendar-months span {
+  position: absolute;
+  top: 0;
+}
+
+.service-calendar-grid {
+  display: block;
+}
+
+.cal-normal {
+  fill: var(--good);
+  opacity: 0.35;
+}
+
+.cal-reduced {
+  fill: var(--bad);
+}
+
+.cal-out {
+  fill: none;
+}
+
+.service-calendar-legend {
   display: flex;
   align-items: center;
-  gap: 8px;
-  background: var(--bg);
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  padding: 6px 10px;
-  font-size: 0.85rem;
+  gap: 6px;
+  margin-top: 8px;
+  font-size: 0.75rem;
+  color: var(--text-muted);
 }
 
-.closure-days {
-  color: var(--text-muted);
-  font-size: 0.75rem;
+.legend-swatch {
+  display: inline-block;
+  width: 11px;
+  height: 11px;
+  border-radius: 2px;
+  margin-left: 10px;
+}
+
+.legend-swatch:first-child {
+  margin-left: 0;
+}
+
+.legend-swatch.cal-normal {
+  background: var(--good);
+  opacity: 0.35;
+}
+
+.legend-swatch.cal-reduced {
+  background: var(--bad);
 }

@@ -25,17 +25,37 @@ function robustDomain(data, dataKeys) {
   return [Math.floor(lo - pad), Math.ceil(hi + pad)]
 }
 
+// Delay figures computed during a reduced-service/diversion day aren't trustworthy --
+// confirmed by inspection during the DST bug investigation that realtime-to-schedule
+// matching degrades badly on those days (observation counts collapsing, wildly
+// implausible medians), because the trips actually running often don't correspond
+// cleanly to the schedule they're being matched against. Rather than plot that noise,
+// null out every line's value on a closure date so the chart shows a real gap there --
+// the red band explains why, instead of a data point implying a reading that isn't real.
+function maskClosureDates(data, closures, dataKeys) {
+  if (!closures.length) return data
+  return data.map((d) => {
+    const reduced = closures.some((c) => d.service_date >= c.start && d.service_date <= c.end)
+    if (!reduced) return d
+    const masked = { ...d }
+    for (const key of dataKeys) masked[key] = null
+    return masked
+  })
+}
+
 // closures (reduced-service date ranges, from service_availability.py) are rendered as
 // shaded bands behind the delay lines rather than a separate chart -- the whole point of
 // tracking both metrics together is seeing whether a delay spike lines up with a real
 // schedule reduction or happened on an otherwise-normal day, which a side-by-side chart
 // makes the reader do the correlating for themselves.
 export default function TrendChart({ data, lines, yLabel, tooltipFormatter, domain, closures = [] }) {
-  const yDomain = domain ?? robustDomain(data, lines.map((l) => l.dataKey))
+  const dataKeys = lines.map((l) => l.dataKey)
+  const maskedData = maskClosureDates(data, closures, dataKeys)
+  const yDomain = domain ?? robustDomain(maskedData, dataKeys)
 
   return (
     <ResponsiveContainer width="100%" height={320}>
-      <LineChart data={data} margin={{ top: 8, right: 16, left: 8, bottom: 8 }}>
+      <LineChart data={maskedData} margin={{ top: 8, right: 16, left: 8, bottom: 8 }}>
         <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
         <XAxis
           dataKey="service_date"
@@ -51,7 +71,7 @@ export default function TrendChart({ data, lines, yLabel, tooltipFormatter, doma
         />
         <Legend />
         {closures.map((c) => (
-          <ReferenceArea key={c.start} x1={c.start} x2={c.end} fill="var(--bad)" fillOpacity={0.08} strokeOpacity={0} ifOverflow="visible" />
+          <ReferenceArea key={c.start} x1={c.start} x2={c.end} fill="var(--bad)" fillOpacity={0.12} strokeOpacity={0} ifOverflow="visible" />
         ))}
         {lines.map((l) => (
           <Line
@@ -63,7 +83,6 @@ export default function TrendChart({ data, lines, yLabel, tooltipFormatter, doma
             strokeWidth={1.75}
             dot={false}
             isAnimationActive={false}
-            connectNulls
           />
         ))}
       </LineChart>

@@ -3,6 +3,7 @@ import { useParams, Link } from 'react-router-dom'
 import { fetchLineDetail } from '../lib/data'
 import { lineLabel, lineColor, directionLabel } from '../lib/lines'
 import TrendChart from '../components/TrendChart'
+import ServiceCalendar from '../components/ServiceCalendar'
 
 export default function LineDetail() {
   const { line } = useParams()
@@ -19,6 +20,11 @@ export default function LineDetail() {
 
   const color = lineColor(line)
   const directions = Object.keys(data.by_direction)
+  // Calendar's date range comes from the actual delay series, not a hardcoded "last
+  // 365 days from today" — keeps it correct even if the pipeline hasn't run today yet.
+  const allDates = directions.flatMap((dir) => data.by_direction[dir].map((d) => d.service_date))
+  const startDate = allDates.reduce((a, b) => (a < b ? a : b))
+  const endDate = allDates.reduce((a, b) => (a > b ? a : b))
 
   return (
     <div>
@@ -28,24 +34,17 @@ export default function LineDetail() {
         <p className="page-subtitle">
           Trailing 12 months, one point per service day. The y-axis is clipped to a typical range so a
           handful of severe-delay days don't flatten the rest of the chart — hover any point for its
-          exact value; nothing is hidden, just scaled for readability. Shaded bands mark days the line
-          ran a reduced/construction schedule instead of its normal one.
+          exact value; nothing is hidden, just scaled for readability. Reduced/construction days (also
+          shown below as a calendar) are left blank on the delay chart rather than plotted — the
+          schedule those days actually ran often doesn't match cleanly enough for a delay figure to
+          mean anything.
         </p>
       </div>
 
-      {data.closures.length > 0 && (
-        <div className="chart-block">
-          <h3>Reduced-service periods (trailing 12 months)</h3>
-          <ul className="closure-list">
-            {data.closures.map((c) => (
-              <li key={c.start}>
-                <span className="closure-dates">{c.start === c.end ? c.start : `${c.start} – ${c.end}`}</span>
-                <span className="closure-days">{c.days} day{c.days === 1 ? '' : 's'}</span>
-              </li>
-            ))}
-          </ul>
-        </div>
-      )}
+      <div className="chart-block">
+        <h3>Service calendar (trailing 12 months)</h3>
+        <ServiceCalendar startDate={startDate} endDate={endDate} closures={data.closures} />
+      </div>
 
       {directions.map((dir) => (
         <section key={dir} className="direction-section">
