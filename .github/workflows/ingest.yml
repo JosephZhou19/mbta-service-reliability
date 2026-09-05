@@ -28,7 +28,7 @@ jobs:
         run: pip install -r backend/requirements.txt
 
       - name: Run ingestion (reconciliation mode — picks up whatever's new/stale)
-        run: python backend/lamp_ingest.py
+        run: python backend/lamp_ingest.py --start-date 2023-01-01
 
       - name: Commit and push any new data
         run: |
