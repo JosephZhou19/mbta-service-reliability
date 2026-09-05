@@ -41,11 +41,11 @@ import fsspec
 import pandas as pd
 import pyarrow.dataset as ds
 
+import lamp_ingest
 import service_availability as sa
 
 ROOT = Path(__file__).resolve().parent
 DAILY_DIR = ROOT / "data" / "daily"
-REF_CACHE_DIR = ROOT / "data" / "ref_cache"
 OUTPUT_DIR = ROOT.parent / "frontend" / "public" / "data"
 
 STATIC_STOP_TIMES_URL = "https://performancedata.mbta.com/lamp/tableau/rail/LAMP_static_stop_times.parquet"
@@ -101,8 +101,10 @@ def compute_scheduled_durations(as_of_date: pd.Timestamp) -> pd.Series:
     many dates' rosters merged together at once for robustness, not one date's exact
     roster the way ingestion needs.
     """
-    svc_by_date_route = pd.read_parquet(REF_CACHE_DIR / "svc_by_date_route.parquet")
-    static_trips = pd.read_parquet(REF_CACHE_DIR / "static_trips.parquet")
+    # ensure_ref_tables (not a plain read) since data/ref_cache/ is gitignored and
+    # regenerable -- confirmed by a real CI failure, a fresh checkout has no cache at
+    # all yet, only lamp_ingest.py's own runs populate it locally.
+    svc_by_date_route, static_trips = lamp_ingest.ensure_ref_tables()
 
     sample_dates = [int((as_of_date - pd.Timedelta(days=i)).strftime("%Y%m%d")) for i in range(SCHEDULE_SAMPLE_DAYS)]
     day_svc = svc_by_date_route[svc_by_date_route.service_date.isin(sample_dates)]
