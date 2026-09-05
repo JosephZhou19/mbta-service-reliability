@@ -13,8 +13,8 @@ export const EFFECT_COLOR = {
   STOP_MOVED: '#0f9b8e',
   ADDITIONAL_SERVICE: '#2f9e44',
   ACCESSIBILITY_ISSUE: '#6b7f99',
-  OTHER_EFFECT: '#8a8a8a',
-  UNKNOWN_EFFECT: '#b5b5b5',
+  OTHER_EFFECT: '#c9a227',
+  UNKNOWN_EFFECT: '#8a8a8a',
 }
 
 export const EFFECT_LABEL = {
@@ -56,6 +56,30 @@ export const EFFECT_DESCRIPTION = {
   OTHER_EFFECT: "MBTA doesn't officially categorize this, but the alert text usually describes an extended delay (a signal or track problem) or a speed restriction/slow zone during track work.",
   UNKNOWN_EFFECT: "MBTA left the effect blank, but the alert text usually describes a real schedule change -- trains short-turning, single-tracking, or a storm-related system-wide reduction.",
 }
+
+// Whether a delay figure computed during this effect is trustworthy enough to plot.
+// The dividing line: does the effect describe trains running a genuinely different
+// pattern than what's published (short-turning, single-tracking, shuttle
+// replacement) -- in which case the realtime trip isn't really being matched against
+// the schedule it's compared to, and any computed delay is noise -- or is it full,
+// normal-pattern service that's simply running behind, where the delay figure is
+// exactly the real thing being measured?
+//
+// Confirmed both ways with real data, not just this reasoning: a genuine system-wide
+// slow zone (OTHER_EFFECT, "Speed restrictions... while track repairs are performed",
+// spanning the real March-September 2023 MBTA slow-zone crisis) showed elevated but
+// internally consistent delay figures with completely normal observation counts --
+// trustworthy. The Mattapan ADDED--trip incident (2026-05-14) and the Green-B/C
+// realtime-match collapse (Aug 2024) -- both REDUCED_SERVICE/DETOUR-type situations --
+// showed collapsed observation counts and wildly implausible medians -- not
+// trustworthy.
+export const MASKS_DELAY_DATA = new Set([
+  'NO_SERVICE',
+  'REDUCED_SERVICE',
+  'MODIFIED_SERVICE',
+  'DETOUR',
+  'UNKNOWN_EFFECT', // "Schedule change" -- see EFFECT_DESCRIPTION
+])
 
 export const NORMAL_COLOR = 'var(--good)'
 

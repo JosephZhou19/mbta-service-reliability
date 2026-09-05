@@ -1,6 +1,6 @@
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend, ReferenceArea } from 'recharts'
 import { formatDate } from '../lib/format'
-import { effectColor } from '../lib/alertEffects'
+import { effectColor, MASKS_DELAY_DATA } from '../lib/alertEffects'
 
 // A handful of genuine outlier days (unbounded seconds, e.g. a severe single-day
 // delay) can otherwise stretch the axis so far that the normal range is crushed into
@@ -43,18 +43,32 @@ function fromEpochDay(t) {
 
 const DAY_MS = 24 * 60 * 60 * 1000
 
+// Only some effects make a day's delay figure untrustworthy -- see MASKS_DELAY_DATA's
+// own comment in lib/alertEffects.js for the dividing line and the real evidence
+// behind it (a genuine slow zone reads as elevated-but-consistent delay data; a
+// reduced/rerouted pattern reads as collapsed, implausible data). Only those get
+// nulled out here so the chart shows a real gap; everything else still plots normally
+// even while shaded.
+function maskUntrustworthyDates(data, statusRanges, dataKeys) {
+  const maskedRanges = statusRanges.filter((r) => MASKS_DELAY_DATA.has(r.effect))
+  if (!maskedRanges.length) return data
+  return data.map((d) => {
+    const flagged = maskedRanges.some((r) => d.service_date >= r.start && d.service_date <= r.end)
+    if (!flagged) return d
+    const masked = { ...d }
+    for (const key of dataKeys) masked[key] = null
+    return masked
+  })
+}
+
 // statusRanges (from alert_status.py) are rendered as shaded bands behind the delay
 // lines rather than a separate chart -- the whole point of tracking both together is
 // seeing whether a delay spike lines up with a real service alert or happened on an
 // otherwise-normal day, which a shared chart shows at a glance instead of making the
-// reader cross-reference two charts. Delay figures are NOT blanked out during a
-// flagged period -- unlike the schedule-footprint/match-rate signals this replaced,
-// not every alert effect necessarily makes the day's delay figure untrustworthy (e.g.
-// SIGNIFICANT_DELAYS is a real, meaningful delay reading, not noise), so suppressing
-// data is deferred to a future per-effect decision rather than applied uniformly here.
+// reader cross-reference two charts.
 export default function TrendChart({ data, lines, yLabel, tooltipFormatter, domain, statusRanges = [] }) {
   const dataKeys = lines.map((l) => l.dataKey)
-  const chartData = data.map((d) => ({ ...d, _t: toEpochDay(d.service_date) }))
+  const chartData = maskUntrustworthyDates(data, statusRanges, dataKeys).map((d) => ({ ...d, _t: toEpochDay(d.service_date) }))
   const yDomain = domain ?? robustDomain(chartData, dataKeys)
 
   return (
@@ -89,7 +103,6 @@ export default function TrendChart({ data, lines, yLabel, tooltipFormatter, doma
             strokeWidth={1.75}
             dot={false}
             isAnimationActive={false}
-            connectNulls
           />
         ))}
       </LineChart>
