@@ -265,17 +265,39 @@ a {
   fill: var(--bad);
 }
 
+.cal-anomaly {
+  fill: var(--warn);
+}
+
 .cal-out {
   fill: none;
 }
 
 .service-calendar-legend {
+  margin: 12px 0 0;
+  padding: 0;
+  font-size: 0.8rem;
+}
+
+.legend-row {
+  display: flex;
+  gap: 10px;
+  padding: 4px 0;
+  align-items: baseline;
+}
+
+.legend-row dt {
   display: flex;
   align-items: center;
   gap: 6px;
-  margin-top: 8px;
-  font-size: 0.75rem;
+  font-weight: 600;
+  flex: 0 0 150px;
+}
+
+.legend-row dd {
+  margin: 0;
   color: var(--text-muted);
+  line-height: 1.4;
 }
 
 .legend-swatch {
@@ -283,11 +305,7 @@ a {
   width: 11px;
   height: 11px;
   border-radius: 2px;
-  margin-left: 10px;
-}
-
-.legend-swatch:first-child {
-  margin-left: 0;
+  flex-shrink: 0;
 }
 
 .legend-swatch.cal-normal {
@@ -297,4 +315,8 @@ a {
 
 .legend-swatch.cal-reduced {
   background: var(--bad);
+}
+
+.legend-swatch.cal-anomaly {
+  background: var(--warn);
 }

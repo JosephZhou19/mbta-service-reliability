@@ -12,21 +12,34 @@ function fmt(d) {
   return d.toISOString().slice(0, 10)
 }
 
+function expandRanges(ranges) {
+  const s = new Set()
+  for (const c of ranges) {
+    for (let d = parseDate(c.start); d <= parseDate(c.end); d = new Date(d.getTime() + DAY_MS)) {
+      s.add(fmt(d))
+    }
+  }
+  return s
+}
+
 // A GitHub-contributions-style day grid: one column per calendar week, one row per
 // day-of-week, trailing-12-months date range. Chosen over the date-range pill list it
 // replaces because clustering and frequency (is this line reduced constantly, or in a
 // few multi-week blocks?) reads at a glance from a shape, where a list of ranges makes
 // the reader do that pattern-matching themselves one line at a time.
-export default function ServiceCalendar({ startDate, endDate, closures }) {
-  const reducedDates = useMemo(() => {
-    const s = new Set()
-    for (const c of closures) {
-      for (let d = parseDate(c.start); d <= parseDate(c.end); d = new Date(d.getTime() + DAY_MS)) {
-        s.add(fmt(d))
-      }
-    }
-    return s
-  }, [closures])
+//
+// Three tiers, not two: reduced (red) is schedule-confirmed -- a stop normally served on
+// this line is missing from the published schedule that day. anomaly (orange) is a
+// second, lower-confidence signal -- the published schedule looked completely normal,
+// but far fewer real trips than usual could be matched to it, which happened for real
+// (confirmed on Green-B/C, Aug 22-26 2024: 97.6% of that day's matched trips were
+// unscheduled placeholder trip_ids, yet the GTFS schedule was byte-for-byte unchanged)
+// but isn't a published change we can point to the way reduced is. Reduced takes
+// precedence if a day is somehow eligible for both (it shouldn't be, given how the
+// backend computes it, but the two are drawn from separate signals).
+export default function ServiceCalendar({ startDate, endDate, closures, anomalies = [] }) {
+  const reducedDates = useMemo(() => expandRanges(closures), [closures])
+  const anomalyDates = useMemo(() => expandRanges(anomalies), [anomalies])
 
   const { weeks, monthLabels } = useMemo(() => {
     const start = parseDate(startDate)
@@ -38,7 +51,9 @@ export default function ServiceCalendar({ startDate, endDate, closures }) {
     for (let d = new Date(gridStart); d <= end; d = new Date(d.getTime() + DAY_MS)) {
       const dateStr = fmt(d)
       const inRange = d >= start && d <= end
-      days.push({ date: dateStr, dow: d.getDay(), inRange, reduced: reducedDates.has(dateStr) })
+      const reduced = reducedDates.has(dateStr)
+      const anomaly = !reduced && anomalyDates.has(dateStr)
+      days.push({ date: dateStr, dow: d.getDay(), inRange, reduced, anomaly })
     }
 
     const weeks = []
@@ -57,9 +72,23 @@ export default function ServiceCalendar({ startDate, endDate, closures }) {
     })
 
     return { weeks, monthLabels }
-  }, [startDate, endDate, reducedDates])
+  }, [startDate, endDate, reducedDates, anomalyDates])
 
   const gridWidth = weeks.length * (CELL + GAP)
+
+  function cellClass(day) {
+    if (!day.inRange) return 'cal-out'
+    if (day.reduced) return 'cal-reduced'
+    if (day.anomaly) return 'cal-anomaly'
+    return 'cal-normal'
+  }
+
+  function cellTitle(day) {
+    if (!day.inRange) return null
+    if (day.reduced) return `${day.date} — reduced service`
+    if (day.anomaly) return `${day.date} — service anomaly`
+    return day.date
+  }
 
   return (
     <div className="service-calendar" style={{ width: gridWidth }}>
@@ -78,17 +107,27 @@ export default function ServiceCalendar({ startDate, endDate, closures }) {
               width={CELL}
               height={CELL}
               rx={2}
-              className={!day.inRange ? 'cal-out' : day.reduced ? 'cal-reduced' : 'cal-normal'}
+              className={cellClass(day)}
             >
-              {day.inRange && <title>{day.date}{day.reduced ? ' — reduced service' : ''}</title>}
+              {day.inRange && <title>{cellTitle(day)}</title>}
             </rect>
           )),
         )}
       </svg>
-      <div className="service-calendar-legend">
-        <span className="legend-swatch cal-normal" /> normal service
-        <span className="legend-swatch cal-reduced" /> reduced service
-      </div>
+      <dl className="service-calendar-legend">
+        <div className="legend-row">
+          <dt><span className="legend-swatch cal-normal" />Normal</dt>
+          <dd>Ran its usual, full published schedule with typical realtime coverage.</dd>
+        </div>
+        <div className="legend-row">
+          <dt><span className="legend-swatch cal-reduced" />Reduced service</dt>
+          <dd>A stop normally served on this line is missing from that day's published schedule — a confirmed construction/diversion pattern.</dd>
+        </div>
+        <div className="legend-row">
+          <dt><span className="legend-swatch cal-anomaly" />Service anomaly</dt>
+          <dd>The published schedule looked normal, but far fewer real trips than usual could be matched to it — something happened operationally, though we can't confirm exactly what from the schedule alone.</dd>
+        </div>
+      </dl>
     </div>
   )
 }

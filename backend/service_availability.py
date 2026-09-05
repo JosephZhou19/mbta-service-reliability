@@ -46,6 +46,26 @@ real-time span already requires a smaller occurrence count.
 This is an analysis/rollup step, not part of daily ingestion -- it recomputes
 over full history each run, which is cheap (a few hundred thousand rows, all
 already on disk).
+
+A second, independent signal -- "service anomaly" -- flags days where the
+*published* schedule looks completely normal (no reduced-service flag above)
+but the realtime match rate (real trips actually matched to a scheduled
+trip_id -- the same roster-restricted count lamp_ingest.py's delay
+computation uses) collapses well below that line's own recent normal volume.
+Found by auditing delay data for large day-over-day drops: Green-B/Green-C
+on 2024-08-22 through 08-26 had 97.6% of matched trips come back as ADDED-
+(unscheduled) trip_ids -- observation counts fell to 2-6% of normal -- yet
+the published GTFS schedule was byte-for-byte the same stops as every
+surrounding day. Something clearly happened operationally that MBTA didn't
+reflect in the schedule; this catches that where the stop-based signal
+structurally cannot. It's a different confidence level than "reduced" --
+we can't point to a specific published change the way we can for a missing
+stop, so it's kept as a separate flag (surfaced in the UI as a distinct
+color) rather than folded into the same category. Reuses the same weekday/
+Saturday/Sunday trailing-baseline machinery as the stop-based signal, just
+tracking a daily count instead of per-stop presence, and yields to a
+reduced-service flag on the same day (that's the more specific, better-
+evidenced explanation, so a day isn't double-counted under both).
 """
 from __future__ import annotations
 
@@ -65,6 +85,10 @@ SATURDAY_MIN_PERIODS = 5
 SUNDAY_WINDOW = 13
 SUNDAY_MIN_PERIODS = 5
 NORMAL_THRESHOLD = 0.5
+
+MATCH_RATE_THRESHOLD = 0.5  # a day's real matched-observation count falling below this
+# fraction of its trailing normal volume flags a service anomaly -- same starting
+# threshold philosophy as NORMAL_THRESHOLD above, tunable once seen against real data.
 
 
 def load_all_footprints() -> pd.DataFrame:
@@ -148,9 +172,8 @@ def summarize(reduced: pd.DataFrame, classifiable: pd.DataFrame) -> pd.DataFrame
     return pd.DataFrame(rows).sort_values("reduced_pct", ascending=False)
 
 
-def closure_ranges(reduced: pd.DataFrame, line: str) -> list[tuple[str, str, int]]:
-    """Contiguous runs of reduced days for one line, collapsed across directions."""
-    s = reduced.loc[:, (line, slice(None))].any(axis=1)
+def date_ranges(s: pd.Series) -> list[tuple[str, str, int]]:
+    """Contiguous runs of True in a boolean series indexed by date."""
     runs = []
     in_run = False
     start = None
@@ -164,6 +187,79 @@ def closure_ranges(reduced: pd.DataFrame, line: str) -> list[tuple[str, str, int
     if in_run:
         runs.append((start, s.index[-1]))
     return [(a.strftime("%Y-%m-%d"), b.strftime("%Y-%m-%d"), (b - a).days + 1) for a, b in runs]
+
+
+def closure_ranges(reduced: pd.DataFrame, line: str) -> list[tuple[str, str, int]]:
+    """Contiguous runs of reduced days for one line, collapsed across directions."""
+    return date_ranges(reduced.loc[:, (line, slice(None))].any(axis=1))
+
+
+def load_daily_obs_counts() -> pd.DataFrame:
+    """Total matched observations (the same roster-restricted `n` delay computation
+    uses) per line+direction+service_date -- input to the match-rate-collapse signal."""
+    frames = []
+    for path in sorted(DAILY_DIR.glob("*-delay.parquet")):
+        df = pd.read_parquet(path)
+        if not df.empty:
+            frames.append(df)
+    delay = pd.concat(frames, ignore_index=True)
+    # Residual pre-fix backfill artifact (see rollup.py) -- never a real line label.
+    delay = delay[delay["line"] != "Red"]
+    return delay.groupby(["line", "direction_id", "service_date"])["n"].sum().reset_index()
+
+
+def build_count_matrix(counts: pd.DataFrame) -> pd.DataFrame:
+    """Dense matrix: rows = every service_date in range, columns = every (line,
+    direction) pair, values = total matched observations that day (0 if none)."""
+    counts = counts.copy()
+    counts["service_date"] = pd.to_datetime(counts["service_date"])
+    wide = counts.pivot_table(index="service_date", columns=["line", "direction_id"], values="n", aggfunc="sum", fill_value=0)
+    full_range = pd.date_range(wide.index.min(), wide.index.max(), freq="D")
+    return wide.reindex(full_range, fill_value=0)
+
+
+def compute_count_baseline(counts_wide: pd.DataFrame) -> pd.DataFrame:
+    """Same weekday/Saturday/Sunday split as compute_baseline, but a rolling MEDIAN of
+    raw observation counts rather than a mean of booleans -- there's no natural rate to
+    average for a count the way there is for stop presence."""
+    dow = counts_wide.index.dayofweek
+    parts = []
+    for mask, window, min_periods in [
+        (dow < 5, WEEKDAY_WINDOW, WEEKDAY_MIN_PERIODS),
+        (dow == 5, SATURDAY_WINDOW, SATURDAY_MIN_PERIODS),
+        (dow == 6, SUNDAY_WINDOW, SUNDAY_MIN_PERIODS),
+    ]:
+        parts.append(counts_wide.loc[mask].shift(1).rolling(window=window, min_periods=min_periods).median())
+    return pd.concat(parts).sort_index()
+
+
+def flag_anomaly_days(counts_wide: pd.DataFrame, reduced: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """A line has a service anomaly on a day if its matched-observation count collapses
+    below MATCH_RATE_THRESHOLD of its trailing normal volume, UNLESS that day is already
+    explained by a reduced-service (published-schedule) flag -- red takes precedence
+    over orange since it's the more specific, better-evidenced explanation."""
+    baseline = compute_count_baseline(counts_wide)
+    has_baseline = baseline.notna()
+    collapsed = (counts_wide < baseline * MATCH_RATE_THRESHOLD) & has_baseline
+
+    lines = collapsed.columns.get_level_values("line").unique()
+    anomaly = pd.DataFrame(index=collapsed.index)
+    classifiable = pd.DataFrame(index=collapsed.index)
+    reduced_lines = set(reduced.columns.get_level_values("line")) if reduced is not None else set()
+    for line in lines:
+        line_anomaly = collapsed.loc[:, (line, slice(None))].any(axis=1)
+        if line in reduced_lines:
+            already_reduced = reduced.loc[:, (line, slice(None))].any(axis=1).reindex(line_anomaly.index, fill_value=False)
+            line_anomaly = line_anomaly & ~already_reduced
+        anomaly[line] = line_anomaly
+        classifiable[line] = has_baseline.loc[:, (line, slice(None))].any(axis=1)
+    return anomaly, classifiable
+
+
+def anomaly_ranges(anomaly: pd.DataFrame, line: str) -> list[tuple[str, str, int]]:
+    """Contiguous runs of service-anomaly days for one line (anomaly's columns are
+    already flat per-line, unlike reduced's (line, direction) MultiIndex)."""
+    return date_ranges(anomaly[line])
 
 
 def main():
@@ -185,6 +281,20 @@ def main():
     print("\n=== Closure date ranges (>=1 day) ===")
     for line in reduced.columns.get_level_values("line").unique():
         ranges = closure_ranges(reduced, line)
+        if ranges:
+            print(f"\n{line}:")
+            for start, end, days in ranges:
+                print(f"  {start} to {end}  ({days} day{'s' if days != 1 else ''})")
+
+    print("\nLoading daily observation counts...", file=sys.stderr)
+    counts = load_daily_obs_counts()
+    counts_wide = build_count_matrix(counts)
+    print("Flagging service-anomaly days...", file=sys.stderr)
+    anomaly, _anomaly_classifiable = flag_anomaly_days(counts_wide, reduced)
+
+    print("\n=== Service-anomaly date ranges (>=1 day; published schedule normal, match rate collapsed) ===")
+    for line in anomaly.columns:
+        ranges = anomaly_ranges(anomaly, line)
         if ranges:
             print(f"\n{line}:")
             for start, end, days in ranges:
