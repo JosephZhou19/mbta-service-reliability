@@ -137,12 +137,46 @@ def ensure_ref_tables() -> tuple[pd.DataFrame, pd.DataFrame]:
 
 
 def scheduled_epoch(service_date_str: str, seconds_since_midnight: pd.Series) -> pd.Series:
-    """Convert GTFS-style local (Eastern) seconds-since-midnight to a UTC POSIX epoch,
-    DST-aware. Naive fixed-offset arithmetic is wrong across the March/November DST
-    boundary — this was a real bug caught during validation, not a hypothetical one."""
-    midnight_local = pd.Timestamp(service_date_str, tz=EASTERN)
-    midnight_epoch = midnight_local.timestamp()
-    return midnight_epoch + seconds_since_midnight
+    """Convert GTFS-style local (Eastern) seconds-since-midnight (can exceed 86400 for a
+    trip that runs past midnight, still attributed to the earlier service_date) to a UTC
+    POSIX epoch, DST-aware.
+
+    An earlier version of this function localized only midnight to Eastern, then added
+    seconds_since_midnight as flat arithmetic on the resulting UTC epoch -- which
+    silently assumes a constant UTC offset for the entire calendar day. That's wrong on
+    the two DST transition dates a year: confirmed by inspection that on 2026-03-08 (the
+    spring-forward date, which only has 23 real hours), a trip scheduled for 24:00:00
+    computed to "2026-03-09 01:00:00 EDT" instead of the correct "00:00:00 EDT" -- a full
+    hour of drift that reads as every train having run ~1 hour "early" for essentially
+    the entire day (subway service barely runs before the 2am transition point anyway),
+    every year since 2023, on every line. The mirror bug hits the November fall-back date
+    with the opposite (~+1 hour) sign.
+
+    Fixed by localizing the actual target WALL-CLOCK instant (calendar date advanced by
+    whole days for times >=86400, plus the time-of-day remainder), not by doing epoch
+    arithmetic on top of a single localized reference point -- so the timezone library
+    resolves the correct UTC offset for wherever that instant actually falls, spring-
+    forward and fall-back included.
+    """
+    days_offset = (seconds_since_midnight // 86400).astype("int64")
+    seconds_within_day = seconds_since_midnight % 86400
+    base = pd.Timestamp(service_date_str)
+    wall_clock = base + pd.to_timedelta(days_offset, unit="D") + pd.to_timedelta(seconds_within_day, unit="s")
+    # nonexistent (a wall-clock time inside the skipped spring-forward hour -- shouldn't
+    # occur in practice since transit agencies don't schedule trains for a time slot that
+    # doesn't exist, but shift forward past the gap rather than crash if it ever does):
+    # treat it as the next real instant. ambiguous (the repeated fall-back hour, which
+    # GTFS's plain local time can't disambiguate): NaT rather than silently guessing which
+    # occurrence was meant -- flows through as a dropped row, same as any other bad match.
+    localized = wall_clock.dt.tz_localize(EASTERN, nonexistent="shift_forward", ambiguous="NaT")
+    # Subtract-and-divide by a Timedelta rather than casting to int64 and dividing by a
+    # fixed 1e9: pandas 2.x infers datetime64 resolution dynamically (seconds vs.
+    # nanoseconds depending on the inputs), so a fixed divisor silently gives the wrong
+    # scale for some inputs -- confirmed by inspection, this returned 1970-epoch garbage
+    # for exactly the mixed-resolution case this function actually receives. Timedelta
+    # division is resolution-independent, and NaT propagates through it as a real NaN
+    # rather than int64's large-negative NaT sentinel.
+    return (localized - pd.Timestamp("1970-01-01", tz="UTC")) / pd.Timedelta(seconds=1)
 
 
 MAX_PLAUSIBLE_DELAY_SEC = 3600  # subway arrival delay beyond +/-1h at a single stop is a
