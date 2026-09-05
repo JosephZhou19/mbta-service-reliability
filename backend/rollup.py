@@ -17,18 +17,14 @@ Produces:
       window: contiguous date ranges each tagged with the winning MBTA alert
       effect type and a representative explanation.
 
-Written to frontend/public/data -- not committed to the repo (see
-frontend/.gitignore), fully regenerable from data/daily/ and
-service_availability.py, same reasoning as data/ref_cache/. The frontend
-dev server and build both read straight from there.
+Written to frontend/public/data -- not committed (see frontend/.gitignore),
+fully regenerable from data/daily/ and data/alerts.parquet. The frontend dev
+server and build both read straight from there.
 
 Blending across hours/directions to get one "current" percentile per line is
-an approximation: you cannot correctly average percentiles computed over
-different buckets into an exact combined percentile without the raw values,
-which the daily summaries deliberately don't retain (that's the whole point
-of summarizing). This uses a size-weighted average (weight = n, the number of
-underlying observations in each bucket) as a defensible, clearly-labeled
-approximation, not a claim of statistical exactness.
+an approximation, not an exact combined percentile -- the daily summaries
+don't retain raw values, so this uses a size-weighted average (weight = n)
+instead.
 
 Usage:
     python backend/rollup.py
@@ -54,10 +50,8 @@ STATIC_STOP_TIMES_URL = "https://performancedata.mbta.com/lamp/tableau/rail/LAMP
 HTTP_FS = fsspec.filesystem("https")
 
 TRAILING_WINDOW_DAYS = 30
-LINE_DETAIL_WINDOW_DAYS = 365  # trailing 1 year — full multi-year history is too wide a
-# span to read anything specific into; a year still shows real seasonal/incident patterns
-# without diluting them across periods nobody's comparing against day-to-day anyway. Also
-# matches the "% of year" framing of the service-availability metric.
+LINE_DETAIL_WINDOW_DAYS = 365  # a year shows real seasonal/incident patterns without
+# diluting across periods nobody's comparing day-to-day against anyway.
 
 SCHEDULE_SAMPLE_DAYS = 30  # trailing days sampled for "typical" scheduled trip length
 
@@ -82,30 +76,14 @@ def weighted_percentile_blend(df: pd.DataFrame, value_col: str, weight_col: str,
 
 def compute_scheduled_durations(as_of_date: pd.Timestamp) -> pd.Series:
     """Typical terminus-to-terminus SCHEDULED trip duration per line, blended across
-    direction (both directions cover the same physical distance, so they're close
-    enough that a single blended number is a reasonable guesstimate rather than a
-    meaningful split).
-
-    Sampled across the trailing SCHEDULE_SAMPLE_DAYS, not just the most recent single
-    date — a single day can be actively mid-diversion, which would otherwise silently
-    bake a temporary reduction into the "typical" length for as long as it lasts.
-
-    Takes the MAX of each sampled day's median trip length, not the median-of-medians:
-    a real extended closure can outlast any fixed window and dominate a median once
-    diverted days are the majority — max only needs a single normal day anywhere in the
-    window to recover the real length. The tradeoff is slower to reflect a genuine
-    *permanent* schedule change (acceptable: rare, and self-corrects once the window
-    fully ages past it) versus the worse failure mode of silently reporting a closure's
-    reduced length as "typical."
-
-    Duplicates lamp_ingest.py's Red-unbranched-exclusion (see build_scheduled_roster
-    there for the full rationale) rather than reusing it directly, since this samples
-    many dates' rosters merged together at once for robustness, not one date's exact
-    roster the way ingestion needs.
+    direction. Sampled across the trailing SCHEDULE_SAMPLE_DAYS rather than just the
+    latest date, since a single day could be mid-diversion. Takes the MAX of each
+    sampled day's median trip length, not the median-of-medians: a real extended
+    closure can dominate a median once diverted days are the majority, but max only
+    needs one normal day anywhere in the window to recover the real length.
     """
-    # ensure_ref_tables (not a plain read) since data/ref_cache/ is gitignored and
-    # regenerable -- confirmed by a real CI failure, a fresh checkout has no cache at
-    # all yet, only lamp_ingest.py's own runs populate it locally.
+    # ensure_ref_tables, not a plain read: data/ref_cache/ is gitignored/regenerable,
+    # and a fresh checkout has no cache until lamp_ingest.py populates it.
     svc_by_date_route, static_trips = lamp_ingest.ensure_ref_tables()
 
     sample_dates = [int((as_of_date - pd.Timedelta(days=i)).strftime("%Y%m%d")) for i in range(SCHEDULE_SAMPLE_DAYS)]

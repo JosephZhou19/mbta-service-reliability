@@ -256,23 +256,6 @@ a {
   display: block;
 }
 
-.cal-normal {
-  fill: var(--good);
-  opacity: 0.35;
-}
-
-.cal-reduced {
-  fill: var(--bad);
-}
-
-.cal-anomaly {
-  fill: var(--warn);
-}
-
-.cal-out {
-  fill: none;
-}
-
 .service-calendar-legend {
   margin: 12px 0 0;
   padding: 0;
@@ -306,17 +289,4 @@ a {
   height: 11px;
   border-radius: 2px;
   flex-shrink: 0;
-}
-
-.legend-swatch.cal-normal {
-  background: var(--good);
-  opacity: 0.35;
-}
-
-.legend-swatch.cal-reduced {
-  background: var(--bad);
-}
-
-.legend-swatch.cal-anomaly {
-  background: var(--warn);
 }

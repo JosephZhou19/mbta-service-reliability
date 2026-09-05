@@ -6,16 +6,10 @@ import { lineColor } from '../lib/lines'
 import LineBadge from '../components/LineBadge'
 import Sparkline from '../components/Sparkline'
 
-// Sorting always uses the underlying delay in seconds (key), not the displayed trip
-// time — a naturally long line (e.g. Green-D, ~65 min) shouldn't rank as "worse" than
-// a short one just for being long; what should rank it is how much later than its OWN
-// schedule it runs. display() renders the more readable absolute-trip-time guesstimate
-// where available, falling back to the raw delay for a line without one (see Overview).
-//
-// trendKey is null for availability: overview.json only carries a single trailing-value
-// availability figure, not a daily series (that lives per-closure-range in the line-detail
-// JSON instead) — so there's no sparkline to draw for that column, rather than faking one
-// from an unrelated series.
+// Sorts by underlying delay in seconds, not the displayed trip time -- a naturally
+// long line shouldn't rank "worse" just for being long. trendKey is null for
+// availability since overview.json only has a single trailing value for it, not a
+// daily series to sparkline.
 const COLUMNS = [
   { key: 'availability_pct_last_year', label: 'Availability (12mo)', sortDir: 'asc', trendKey: null, display: (l) => pct(l.availability_pct_last_year) },
   { key: 'delay_p90_sec', label: '90th pct. trip', sortDir: 'desc', trendKey: 'delay_p50_sec', display: (l) => (l.p90_trip_sec !== null ? durationMin(l.p90_trip_sec) : secToMin(l.delay_p90_sec)) },
@@ -71,26 +65,29 @@ export default function Leaderboard() {
           </tr>
         </thead>
         <tbody>
-          {sorted.map((l, i) => (
-            <tr key={l.line}>
-              <td className="rank-cell">{i + 1}</td>
-              <td>
-                <Link to={`/line/${encodeURIComponent(l.line)}`}>
-                  <LineBadge line={l.line} />
-                </Link>
-              </td>
-              {COLUMNS.map((c) => (
-                <td key={c.key} className={sortKey === c.key ? 'sorted-cell' : ''}>{c.display(l)}</td>
-              ))}
-              <td>
-                {sortedCol.trendKey ? (
-                  <Sparkline data={l.trend} dataKey={sortedCol.trendKey} color={lineColor(l.line)} />
-                ) : (
-                  <span className="sparkline-empty">{l.classifiable_days_last_year - l.normal_days_last_year} affected day{l.classifiable_days_last_year - l.normal_days_last_year === 1 ? '' : 's'}</span>
-                )}
-              </td>
-            </tr>
-          ))}
+          {sorted.map((l, i) => {
+            const affectedDays = l.classifiable_days_last_year - l.normal_days_last_year
+            return (
+              <tr key={l.line}>
+                <td className="rank-cell">{i + 1}</td>
+                <td>
+                  <Link to={`/line/${encodeURIComponent(l.line)}`}>
+                    <LineBadge line={l.line} />
+                  </Link>
+                </td>
+                {COLUMNS.map((c) => (
+                  <td key={c.key} className={sortKey === c.key ? 'sorted-cell' : ''}>{c.display(l)}</td>
+                ))}
+                <td>
+                  {sortedCol.trendKey ? (
+                    <Sparkline data={l.trend} dataKey={sortedCol.trendKey} color={lineColor(l.line)} />
+                  ) : (
+                    <span className="sparkline-empty">{affectedDays} affected day{affectedDays === 1 ? '' : 's'}</span>
+                  )}
+                </td>
+              </tr>
+            )
+          })}
         </tbody>
       </table>
     </div>

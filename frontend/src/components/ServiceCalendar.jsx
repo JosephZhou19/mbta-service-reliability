@@ -14,16 +14,12 @@ function fmt(d) {
 }
 
 // A GitHub-contributions-style day grid: one column per calendar week, one row per
-// day-of-week, trailing-12-months date range. Chosen over a date-range pill list
-// because clustering and frequency (is this line affected constantly, or in a few
-// multi-week blocks?) reads at a glance from a shape, where a list of ranges makes the
-// reader do that pattern-matching themselves one line at a time.
+// day-of-week. Shows clustering/frequency at a glance, where a list of date ranges
+// would make the reader do that pattern-matching themselves.
 //
-// statusRanges comes straight from alert_status.py: contiguous date ranges tagged with
-// the MBTA alert effect type that "won" that day (see its module docstring for the
-// precedence order among effects, and why some effect types are common enough to need
-// one) plus a representative reason. Colors are shared with TrendChart's shading via
-// lib/alertEffects.js so the same effect always reads as the same color everywhere.
+// statusRanges comes from alert_status.py: contiguous date ranges tagged with the
+// winning MBTA alert effect plus a representative reason. Colors are shared with
+// TrendChart via lib/alertEffects.js.
 export default function ServiceCalendar({ startDate, endDate, statusRanges = [] }) {
   const dayStatus = useMemo(() => {
     const m = new Map()

@@ -1,9 +1,6 @@
-// Mirrors backend/alert_status.py's EFFECT_PRECEDENCE and the MBTA alert-effect
-// vocabulary actually present in data/alerts.parquet. Colors are chosen to be
-// distinguishable from each other at small calendar-cell size, roughly graded from
-// most service-affecting (dark red) down through informational (gray) -- but the
-// PRECEDENCE (which one wins when several apply to a line on the same day) is what
-// backend/alert_status.py already resolved; this is just the display side of it.
+// Mirrors backend/alert_status.py's EFFECT_PRECEDENCE and MBTA's alert-effect
+// vocabulary. Colors just need to be visually distinguishable -- precedence (which
+// effect wins on a given day) is already resolved server-side.
 export const EFFECT_COLOR = {
   NO_SERVICE: '#8b1a1a',
   REDUCED_SERVICE: '#c22a2a',
@@ -30,20 +27,11 @@ export const EFFECT_LABEL = {
   UNKNOWN_EFFECT: 'Schedule change',
 }
 
-// OTHER_EFFECT and UNKNOWN_EFFECT are MBTA's own catch-all/blank categories -- it
-// doesn't say what happened, only that something did. Rather than leave both reading
-// as equally vague, these two descriptions are our own read of what's actually in
-// them, based on inspecting every eligible (12+ hour, train-service) alert text
-// currently in each bucket:
-//   OTHER_EFFECT: almost entirely explicit delay call-outs ("Delays of about 20
-//     minutes due to a signal problem...") or a stated speed restriction/slow zone
-//     ("Speed restrictions of 10-25 mph... while track repairs are performed").
-//   UNKNOWN_EFFECT: more mixed, but mostly genuine schedule-pattern changes -- trains
-//     short-turning before their normal terminus, single-tracking, or a system-wide
-//     reduction during a storm -- with a handful of narrower entrance/access-only
-//     closures mixed in.
-// This is inference from the alert text, not an MBTA classification -- worth
-// revisiting if either bucket's real content shifts over time.
+// OTHER_EFFECT and UNKNOWN_EFFECT are MBTA's catch-all/blank categories. These two
+// descriptions are our own read of what's actually in each bucket (not an MBTA
+// classification): OTHER_EFFECT is almost entirely explicit delay call-outs or stated
+// speed restrictions; UNKNOWN_EFFECT is more mixed but mostly real pattern changes
+// (short-turning, single-tracking, storm-wide reductions).
 export const EFFECT_DESCRIPTION = {
   NO_SERVICE: 'No trains running on all or part of the line.',
   REDUCED_SERVICE: 'Service running, but at reduced frequency or over a shortened segment.',
@@ -58,21 +46,12 @@ export const EFFECT_DESCRIPTION = {
 }
 
 // Whether a delay figure computed during this effect is trustworthy enough to plot.
-// The dividing line: does the effect describe trains running a genuinely different
-// pattern than what's published (short-turning, single-tracking, shuttle
-// replacement) -- in which case the realtime trip isn't really being matched against
-// the schedule it's compared to, and any computed delay is noise -- or is it full,
-// normal-pattern service that's simply running behind, where the delay figure is
-// exactly the real thing being measured?
-//
-// Confirmed both ways with real data, not just this reasoning: a genuine system-wide
-// slow zone (OTHER_EFFECT, "Speed restrictions... while track repairs are performed",
-// spanning the real March-September 2023 MBTA slow-zone crisis) showed elevated but
-// internally consistent delay figures with completely normal observation counts --
-// trustworthy. The Mattapan ADDED--trip incident (2026-05-14) and the Green-B/C
-// realtime-match collapse (Aug 2024) -- both REDUCED_SERVICE/DETOUR-type situations --
-// showed collapsed observation counts and wildly implausible medians -- not
-// trustworthy.
+// Effects where trains run a genuinely different pattern than published
+// (short-turning, single-tracking, shuttle replacement) get masked -- the realtime
+// trip isn't really matched against the schedule it's compared to, so any computed
+// delay is noise. Full normal-pattern service that's simply running behind
+// (SIGNIFICANT_DELAYS, a real slow zone) is left visible, since the delay figure is
+// exactly the real thing being measured there.
 export const MASKS_DELAY_DATA = new Set([
   'NO_SERVICE',
   'REDUCED_SERVICE',
@@ -80,8 +59,6 @@ export const MASKS_DELAY_DATA = new Set([
   'DETOUR',
   'UNKNOWN_EFFECT', // "Schedule change" -- see EFFECT_DESCRIPTION
 ])
-
-export const NORMAL_COLOR = 'var(--good)'
 
 export function effectColor(effect) {
   return EFFECT_COLOR[effect] || '#999'

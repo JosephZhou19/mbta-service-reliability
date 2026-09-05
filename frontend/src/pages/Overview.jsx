@@ -16,12 +16,9 @@ function delayTone(sec) {
   return 'bad'
 }
 
-// Thresholds are provisional: availability_pct_last_year now means "no MBTA alert of
-// any kind was active," which is a much stricter bar than the old schedule-based
-// definition -- real values run 0-63% across lines rather than 85-99%. Rescaled
-// proportionally so the page doesn't render every line as "bad," pending a decision on
-// whether low-severity effect types (elevator outages, minor delay blurbs) should even
-// count against this figure.
+// availability_pct_last_year means "no MBTA alert of any kind was active," a strict
+// bar that puts real values in the 0-90% range rather than 85-99% -- thresholds scaled
+// accordingly so the page doesn't render every line as "bad."
 function availabilityTone(p) {
   if (p === null || p === undefined) return 'neutral'
   if (p >= 50) return 'good'

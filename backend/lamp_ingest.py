@@ -7,38 +7,26 @@ joined per stop-event) plus two small reference tables used to compute
 scheduled trip counts (LAMP_service_id_by_date_and_route.parquet +
 LAMP_static_trips.parquet).
 
-Reconciliation, not a "yesterday" cursor: every run re-fetches the source
-index.csv and compares its (service_date, last_modified) against our own
-manifest (data/manifest.csv). LAMP revises past days after the fact (the
-very first day in its history, 2019-09-15, has a last_modified from years
-later — confirmed by inspection), so "already have this date" is not
-enough; a date is reprocessed whenever the source's last_modified is newer
-than what we recorded. A run that dies partway through a date simply never
-updates that date's manifest entry, so the next run retries it automatically
-— no separate crash-recovery path needed.
+Reconciliation, not a "yesterday" cursor: every run re-fetches index.csv and
+compares its (service_date, last_modified) against our manifest
+(data/manifest.csv), since LAMP revises past days after the fact. A run that
+dies partway through a date just leaves its manifest entry stale, so the next
+run retries it automatically.
 
-Idempotent by construction: each service_date's output
-(data/daily/{date}.parquet) is fully overwritten on every (re)process, never
-appended to. Re-running the whole pipeline any number of times converges to
-the same state.
+Idempotent by construction: each service_date's output files are fully
+overwritten on every (re)process, never appended to.
 
 Delay is summarized at route+branch+direction+hour+day grain (hour bucketed
-by the SCHEDULED time, so a very late train doesn't get miscategorized into
-a different hour than a rider would have expected it in). Schedule footprint
-(which stops the published schedule actually calls at, per line+direction+day
-— the input to service_availability.py's reduced-service detection) is
-recorded at route+branch+direction+day grain only (no hour) — not because
-LAMP_static_stop_times.parquet is too large to use (predicate pushdown over
-HTTP makes a day's filtered read <1s, well under 1MB), but because it isn't
-needed for that grain.
+by the SCHEDULED time, so a late train isn't miscategorized into a different
+hour than a rider expected it in). Schedule footprint (which stops the
+published schedule calls at, per line+direction+day -- input to the
+reduced-service detection in alert_status.py) is at route+branch+direction+day
+grain only, since hourly isn't needed there.
 
 Delivery rate (observed vs. scheduled stop-visits) was tracked here too in an
-earlier version, and dropped: schedule-footprint-based reduced-service
-detection (service_availability.py) turned out to explain construction/
-diversion-driven shortfall more precisely and more legibly than a bare
-percentage did, and genuine random cancellations on an otherwise-normal day
-are rare enough to show up as a delay spike rather than needing their own
-metric.
+earlier version and dropped: alert-based reduced-service detection explains
+construction/diversion-driven shortfall more precisely, and genuine random
+cancellations are rare enough to just show up as a delay spike instead.
 
 Usage:
     python scripts/lamp_ingest.py                 # reconcile: process anything missing/stale
@@ -53,7 +41,6 @@ import zoneinfo
 from pathlib import Path
 
 import fsspec
-import numpy as np
 import pandas as pd
 import pyarrow.dataset as ds
 import requests
@@ -68,9 +55,8 @@ LAMP_BASE = "https://performancedata.mbta.com/lamp"
 INDEX_URL = f"{LAMP_BASE}/subway-on-time-performance-v1/index.csv"
 SVC_BY_DATE_ROUTE_URL = f"{LAMP_BASE}/tableau/rail/LAMP_service_id_by_date_and_route.parquet"
 STATIC_TRIPS_URL = f"{LAMP_BASE}/tableau/rail/LAMP_static_trips.parquet"
-STATIC_STOP_TIMES_URL = f"{LAMP_BASE}/tableau/rail/LAMP_static_stop_times.parquet"  # 2GB+ total, but
-# clustered/sorted by static_version_key, so predicate pushdown over HTTP (via fsspec) reads only the
-# relevant row groups — a day's worth of stop_times comes back in <1s without downloading the file.
+STATIC_STOP_TIMES_URL = f"{LAMP_BASE}/tableau/rail/LAMP_static_stop_times.parquet"  # 2GB+, but sorted
+# by static_version_key so predicate pushdown reads only the relevant row groups.
 
 HTTP_FS = fsspec.filesystem("https")
 
@@ -138,51 +124,31 @@ def ensure_ref_tables() -> tuple[pd.DataFrame, pd.DataFrame]:
 
 def scheduled_epoch(service_date_str: str, seconds_since_midnight: pd.Series) -> pd.Series:
     """Convert GTFS-style local (Eastern) seconds-since-midnight (can exceed 86400 for a
-    trip that runs past midnight, still attributed to the earlier service_date) to a UTC
-    POSIX epoch, DST-aware.
+    trip past midnight, still attributed to the earlier service_date) to a UTC epoch,
+    DST-aware.
 
-    An earlier version of this function localized only midnight to Eastern, then added
-    seconds_since_midnight as flat arithmetic on the resulting UTC epoch -- which
-    silently assumes a constant UTC offset for the entire calendar day. That's wrong on
-    the two DST transition dates a year: confirmed by inspection that on 2026-03-08 (the
-    spring-forward date, which only has 23 real hours), a trip scheduled for 24:00:00
-    computed to "2026-03-09 01:00:00 EDT" instead of the correct "00:00:00 EDT" -- a full
-    hour of drift that reads as every train having run ~1 hour "early" for essentially
-    the entire day (subway service barely runs before the 2am transition point anyway),
-    every year since 2023, on every line. The mirror bug hits the November fall-back date
-    with the opposite (~+1 hour) sign.
-
-    Fixed by localizing the actual target WALL-CLOCK instant (calendar date advanced by
-    whole days for times >=86400, plus the time-of-day remainder), not by doing epoch
-    arithmetic on top of a single localized reference point -- so the timezone library
-    resolves the correct UTC offset for wherever that instant actually falls, spring-
-    forward and fall-back included.
+    Must localize the actual target wall-clock instant (date advanced by whole days for
+    times >=86400, plus the remainder), not do flat-offset arithmetic on a single
+    localized reference point -- the latter silently assumes a constant UTC offset for
+    the whole day, which is wrong on the two DST transition dates a year (confirmed: it
+    put every train ~1h "early" on every spring-forward date since 2023).
     """
     days_offset = (seconds_since_midnight // 86400).astype("int64")
     seconds_within_day = seconds_since_midnight % 86400
     base = pd.Timestamp(service_date_str)
     wall_clock = base + pd.to_timedelta(days_offset, unit="D") + pd.to_timedelta(seconds_within_day, unit="s")
-    # nonexistent (a wall-clock time inside the skipped spring-forward hour -- shouldn't
-    # occur in practice since transit agencies don't schedule trains for a time slot that
-    # doesn't exist, but shift forward past the gap rather than crash if it ever does):
-    # treat it as the next real instant. ambiguous (the repeated fall-back hour, which
-    # GTFS's plain local time can't disambiguate): NaT rather than silently guessing which
-    # occurrence was meant -- flows through as a dropped row, same as any other bad match.
+    # nonexistent: shift forward past the skipped spring-forward hour. ambiguous: NaT
+    # (dropped downstream) rather than guessing which fall-back occurrence was meant.
     localized = wall_clock.dt.tz_localize(EASTERN, nonexistent="shift_forward", ambiguous="NaT")
-    # Subtract-and-divide by a Timedelta rather than casting to int64 and dividing by a
-    # fixed 1e9: pandas 2.x infers datetime64 resolution dynamically (seconds vs.
-    # nanoseconds depending on the inputs), so a fixed divisor silently gives the wrong
-    # scale for some inputs -- confirmed by inspection, this returned 1970-epoch garbage
-    # for exactly the mixed-resolution case this function actually receives. Timedelta
-    # division is resolution-independent, and NaT propagates through it as a real NaN
-    # rather than int64's large-negative NaT sentinel.
+    # Timedelta division, not int64-cast / 1e9: pandas infers datetime64 resolution
+    # dynamically, so a fixed divisor silently mis-scales some inputs. This also makes
+    # NaT propagate as a real NaN instead of int64's large-negative NaT sentinel.
     return (localized - pd.Timestamp("1970-01-01", tz="UTC")) / pd.Timedelta(seconds=1)
 
 
-MAX_PLAUSIBLE_DELAY_SEC = 3600  # subway arrival delay beyond +/-1h at a single stop is a
-# realtime-to-schedule mismatch on MBTA's side, not a real delay (confirmed by inspection:
-# e.g. a matched pair implying an 8-hour-early or 6-hour-late arrival). Excluded, not clipped,
-# since a clipped value would still corrupt the percentile rather than just the tail.
+MAX_PLAUSIBLE_DELAY_SEC = 3600  # beyond +/-1h is a realtime-to-schedule mismatch on
+# MBTA's side, not a real delay. Excluded, not clipped -- a clipped value would still
+# corrupt the percentile rather than just the tail.
 
 
 def compute_delay_summary(df: pd.DataFrame, service_date_str: str, scheduled_trips: pd.DataFrame) -> pd.DataFrame:
@@ -190,25 +156,18 @@ def compute_delay_summary(df: pd.DataFrame, service_date_str: str, scheduled_tri
     if d.empty:
         return pd.DataFrame()
 
-    # scheduled_arrival_time.notna() is NOT sufficient on its own -- same issue documented
-    # in compute_delivery_summary's roster-restriction, confirmed here independently by a
-    # real case: every single one of Mattapan's 211 trips on 2026-05-14 was an ADDED- trip_id
-    # (LAMP's best-effort nearby-slot guess for a trip that isn't in the static schedule at
-    # all), and MAX_PLAUSIBLE_DELAY_SEC's +/-1h filter below didn't catch it because the
-    # resulting bogus delay (real observed time vs. a fabricated schedule slot) landed within
-    # 30-35 minutes -- implausible, but inside the threshold. That corrupted the entire day's
-    # Mattapan delay stats (p50 around -30 min) since 100% of that day's rows were fake
-    # matches. Restricting to trip_ids actually in the scheduled roster excludes these at the
-    # source rather than relying on a magnitude threshold to catch what's actually a matching
-    # problem, not an extreme-value problem.
+    # scheduled_arrival_time.notna() isn't enough: LAMP fills it with a best-effort
+    # guess even for ADDED- trip_ids not in the static schedule at all, and the
+    # resulting bogus delay can land inside MAX_PLAUSIBLE_DELAY_SEC (confirmed: every
+    # one of Mattapan's 211 trips on 2026-05-14 was ADDED-, corrupting that day's p50 to
+    # ~-30 min). Restricting to trip_ids in the scheduled roster excludes these at the
+    # source instead of relying on a magnitude threshold to catch a matching problem.
     d = d[d["trip_id"].isin(scheduled_trips["trip_id"])]
     if d.empty:
         return pd.DataFrame()
 
-    # Same rationale as compute_delivery_summary: a null branch_route_id on Red
-    # specifically means bus-shuttle diversion placeholder or an unattributable
-    # gap, not real rail service comparable to Red-A/Red-B — drop rather than
-    # let it form a spurious "Red" catch-all bucket.
+    # A null branch_route_id on Red means a bus-shuttle placeholder or unattributable
+    # gap, not real rail service -- drop rather than form a spurious "Red" bucket.
     d = d[~((d["route_id"] == "Red") & d["branch_route_id"].isna())]
     if d.empty:
         return pd.DataFrame()
@@ -228,12 +187,9 @@ def compute_delay_summary(df: pd.DataFrame, service_date_str: str, scheduled_tri
 
 
 def build_scheduled_roster(service_date_str: str, svc_by_date_route: pd.DataFrame, static_trips: pd.DataFrame) -> pd.DataFrame:
-    """The set of trips actually scheduled to run on service_date_str, one row per
-    trip_id, with 'line' resolved to branch_route_id where one exists (Red) and
-    route_id otherwise (Green's branches are already distinct route_ids). Shared by
-    delivery-rate and schedule-footprint computation so both agree on exactly which
-    trips count as "scheduled" for the day.
-    """
+    """Trips scheduled to run on service_date_str, one row per trip_id, with 'line'
+    resolved to branch_route_id where one exists (Red) and route_id otherwise (Green's
+    branches are already distinct route_ids)."""
     date_int = int(service_date_str.replace("-", ""))
     day_svc = svc_by_date_route[svc_by_date_route.service_date == date_int]
     if day_svc.empty:
@@ -243,26 +199,18 @@ def build_scheduled_roster(service_date_str: str, svc_by_date_route: pd.DataFram
     if scheduled_trips.empty:
         return pd.DataFrame()
     scheduled_trips = scheduled_trips.copy()
-    # Only Red has route_id=='Red' for every branch with branch_route_id as the sole
-    # disambiguator; Green's branches are already distinct route_ids (Green-B/C/D/E),
-    # so a null branch_route_id there correctly falls back to route_id. For Red, a null
-    # branch_route_id turned out (on inspection) to mean either a bus-shuttle diversion
-    # placeholder or a rare scheduled short-turnback confined to the shared trunk north
-    # of the Ashmont/Braintree split — in every sampled case, these never appear in the
-    # observed subway data at all (buses aren't rail; the short-turnbacks apparently
-    # just don't run), producing a spurious permanent 0% "Red" catch-all bucket that
-    # also silently starved Red-A/Red-B's own scheduled counts. Drop them outright
-    # rather than let them land in an unattributable bucket.
+    # A null branch_route_id on Red means a bus-shuttle placeholder or a short-turnback
+    # that never appears in observed data -- drop rather than form a spurious "Red"
+    # bucket that also starves Red-A/Red-B's real scheduled counts.
     scheduled_trips = scheduled_trips[~((scheduled_trips["route_id"] == "Red") & scheduled_trips["branch_route_id"].isna())]
     scheduled_trips["line"] = scheduled_trips["branch_route_id"].fillna(scheduled_trips["route_id"])
     return scheduled_trips
 
 
 def fetch_scheduled_stop_times(scheduled_trips: pd.DataFrame) -> pd.DataFrame:
-    """Every (trip, stop) the static schedule calls for on the day scheduled_trips
-    represents, with line/route/direction attached. Predicate-pushed over HTTP by
-    static_version_key, so this stays a sub-second, <1MB read despite the source
-    table being 2GB+ (see STATIC_STOP_TIMES_URL comment)."""
+    """Every (trip, stop) the static schedule calls for, with line/route/direction
+    attached. Predicate-pushed over HTTP by static_version_key, so this stays a
+    sub-second read despite the source table being 2GB+."""
     version_keys = scheduled_trips["static_version_key"].unique().tolist()
     stop_times_dataset = ds.dataset(STATIC_STOP_TIMES_URL, filesystem=HTTP_FS, format="parquet")
     st = stop_times_dataset.to_table(filter=ds.field("static_version_key").isin(version_keys)).to_pandas()
@@ -271,13 +219,8 @@ def fetch_scheduled_stop_times(scheduled_trips: pd.DataFrame) -> pd.DataFrame:
 
 
 def compute_schedule_footprint(st: pd.DataFrame, service_date_str: str) -> pd.DataFrame:
-    """Which stops the published schedule actually calls at for each line+direction
-    on this service date — the raw fact behind service-availability detection. A
-    shuttle-bus diversion or construction closure shows up here as stops silently
-    missing from the day's schedule, distinct from delivery-rate's day-of shortfall
-    against a schedule that was otherwise normal. One row per (line, direction, stop)
-    actually scheduled; interpreting "missing vs. this line's normal stop set" is a
-    rollup-time concern, not this ingestion step's."""
+    """Which stops the published schedule calls at for each line+direction on this
+    date -- one row per (line, direction, stop) actually scheduled."""
     if st.empty:
         return pd.DataFrame()
     footprint = st[["line", "route_id", "direction_id", "stop_id"]].drop_duplicates().reset_index(drop=True)
