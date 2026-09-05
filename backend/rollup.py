@@ -15,8 +15,10 @@ Produces:
       daily delay (p50/p90) split by direction, plus the line's reduced-
       service closure date ranges over that same window.
 
-Not committed to the repo (see .gitignore) -- fully regenerable from
-data/daily/ and service_availability.py, same reasoning as data/ref_cache/.
+Written to frontend/public/data -- not committed to the repo (see
+frontend/.gitignore), fully regenerable from data/daily/ and
+service_availability.py, same reasoning as data/ref_cache/. The frontend
+dev server and build both read straight from there.
 
 Blending across hours/directions to get one "current" percentile per line is
 an approximation: you cannot correctly average percentiles computed over
@@ -44,7 +46,7 @@ import service_availability as sa
 ROOT = Path(__file__).resolve().parent
 DAILY_DIR = ROOT / "data" / "daily"
 REF_CACHE_DIR = ROOT / "data" / "ref_cache"
-OUTPUT_DIR = ROOT / "data" / "rollup"
+OUTPUT_DIR = ROOT.parent / "frontend" / "public" / "data"
 
 STATIC_STOP_TIMES_URL = "https://performancedata.mbta.com/lamp/tableau/rail/LAMP_static_stop_times.parquet"
 HTTP_FS = fsspec.filesystem("https")

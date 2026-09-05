@@ -1,0 +1,261 @@
+:root {
+  --bg: #f7f7f8;
+  --surface: #ffffff;
+  --border: #e2e2e6;
+  --text: #1a1a1e;
+  --text-muted: #6b6b74;
+  --good: #1b7a3d;
+  --warn: #b06a00;
+  --bad: #c22a2a;
+  --link: #0b5fd6;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+}
+
+a {
+  color: var(--link);
+  text-decoration: none;
+}
+
+.app-shell {
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 0 20px 60px;
+}
+
+.app-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 20px 0;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 28px;
+}
+
+.app-title {
+  font-weight: 700;
+  font-size: 1.1rem;
+}
+
+.app-header nav {
+  display: flex;
+  gap: 20px;
+}
+
+.app-header nav a {
+  color: var(--text-muted);
+  font-weight: 500;
+  padding: 6px 0;
+  border-bottom: 2px solid transparent;
+}
+
+.app-header nav a.active {
+  color: var(--text);
+  border-bottom-color: var(--link);
+}
+
+.page-header {
+  margin-bottom: 24px;
+}
+
+.page-header h1 {
+  margin: 0 0 6px;
+  font-size: 1.6rem;
+}
+
+.page-subtitle {
+  color: var(--text-muted);
+  margin: 0;
+  max-width: 65ch;
+  line-height: 1.5;
+}
+
+.back-link {
+  display: inline-block;
+  margin-bottom: 10px;
+  color: var(--text-muted);
+}
+
+.loading, .error {
+  color: var(--text-muted);
+  padding: 40px 0;
+}
+
+.error {
+  color: var(--bad);
+}
+
+/* Overview */
+.overview-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 16px;
+}
+
+.overview-card {
+  display: block;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-left: 4px solid var(--line-color);
+  border-radius: 8px;
+  padding: 16px;
+  color: var(--text);
+}
+
+.overview-card:hover {
+  border-color: var(--line-color);
+}
+
+.overview-card-stats {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+  margin: 14px 0 10px;
+}
+
+.overview-card-footer {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
+
+/* LineBadge */
+.line-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 600;
+}
+
+.line-badge-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--line-color);
+  flex-shrink: 0;
+}
+
+/* StatTile */
+.stat-tile {
+  padding: 8px 0;
+}
+
+.stat-tile-label {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  margin-bottom: 2px;
+}
+
+.stat-tile-value {
+  font-size: 1.1rem;
+  font-weight: 700;
+}
+
+.stat-tile-good .stat-tile-value { color: var(--good); }
+.stat-tile-warn .stat-tile-value { color: var(--warn); }
+.stat-tile-bad .stat-tile-value { color: var(--bad); }
+
+/* Leaderboard */
+.leaderboard-table {
+  width: 100%;
+  border-collapse: collapse;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.leaderboard-table th, .leaderboard-table td {
+  padding: 10px 14px;
+  text-align: left;
+  border-bottom: 1px solid var(--border);
+}
+
+.leaderboard-table th {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  font-weight: 600;
+  cursor: default;
+}
+
+.leaderboard-table th.sortable {
+  cursor: pointer;
+  user-select: none;
+}
+
+.leaderboard-table th.sorted {
+  color: var(--text);
+}
+
+.leaderboard-table td.sorted-cell {
+  font-weight: 700;
+}
+
+.rank-cell {
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.sparkline-empty {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
+
+/* Line detail */
+.direction-section {
+  margin-bottom: 40px;
+}
+
+.direction-section h2 {
+  font-size: 1.05rem;
+  margin-bottom: 12px;
+}
+
+.chart-block {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 16px;
+  margin-bottom: 16px;
+}
+
+.chart-block h3 {
+  margin: 0 0 8px;
+  font-size: 0.9rem;
+  color: var(--text-muted);
+  font-weight: 600;
+}
+
+/* Closure list */
+.closure-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.closure-list li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 6px 10px;
+  font-size: 0.85rem;
+}
+
+.closure-days {
+  color: var(--text-muted);
+  font-size: 0.75rem;
+}

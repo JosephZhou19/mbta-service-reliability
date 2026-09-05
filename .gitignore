@@ -5,5 +5,5 @@ __pycache__/
 # Pipeline reference-table cache — regenerable from source (LAMP), large over time
 backend/data/ref_cache/
 
-# rollup.py build output — regenerable from data/daily/, not the source of truth
-backend/data/rollup/
+# frontend/node_modules and frontend/public/data (rollup.py's build output) have their
+# own ignores in frontend/.gitignore
