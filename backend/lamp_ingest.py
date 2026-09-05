@@ -185,8 +185,23 @@ MAX_PLAUSIBLE_DELAY_SEC = 3600  # subway arrival delay beyond +/-1h at a single 
 # since a clipped value would still corrupt the percentile rather than just the tail.
 
 
-def compute_delay_summary(df: pd.DataFrame, service_date_str: str) -> pd.DataFrame:
+def compute_delay_summary(df: pd.DataFrame, service_date_str: str, scheduled_trips: pd.DataFrame) -> pd.DataFrame:
     d = df.dropna(subset=["stop_timestamp", "scheduled_arrival_time"]).copy()
+    if d.empty:
+        return pd.DataFrame()
+
+    # scheduled_arrival_time.notna() is NOT sufficient on its own -- same issue documented
+    # in compute_delivery_summary's roster-restriction, confirmed here independently by a
+    # real case: every single one of Mattapan's 211 trips on 2026-05-14 was an ADDED- trip_id
+    # (LAMP's best-effort nearby-slot guess for a trip that isn't in the static schedule at
+    # all), and MAX_PLAUSIBLE_DELAY_SEC's +/-1h filter below didn't catch it because the
+    # resulting bogus delay (real observed time vs. a fabricated schedule slot) landed within
+    # 30-35 minutes -- implausible, but inside the threshold. That corrupted the entire day's
+    # Mattapan delay stats (p50 around -30 min) since 100% of that day's rows were fake
+    # matches. Restricting to trip_ids actually in the scheduled roster excludes these at the
+    # source rather than relying on a magnitude threshold to catch what's actually a matching
+    # problem, not an extreme-value problem.
+    d = d[d["trip_id"].isin(scheduled_trips["trip_id"])]
     if d.empty:
         return pd.DataFrame()
 
@@ -289,8 +304,8 @@ def process_date(service_date_str: str, file_url: str, svc_by_date_route: pd.Dat
         return "empty"
 
     try:
-        delay = compute_delay_summary(df, service_date_str)
         scheduled_trips = build_scheduled_roster(service_date_str, svc_by_date_route, static_trips)
+        delay = compute_delay_summary(df, service_date_str, scheduled_trips)
         st = fetch_scheduled_stop_times(scheduled_trips) if not scheduled_trips.empty else pd.DataFrame()
         footprint = compute_schedule_footprint(st, service_date_str)
     except Exception as e:
