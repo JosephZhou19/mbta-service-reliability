@@ -30,11 +30,14 @@ jobs:
       - name: Run ingestion (reconciliation mode — picks up whatever's new/stale)
         run: python backend/lamp_ingest.py --start-date 2023-01-01
 
+      - name: Refresh service alerts
+        run: python backend/alerts_ingest.py
+
       - name: Commit and push any new data
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add backend/data/daily backend/data/manifest.csv
+          git add backend/data/daily backend/data/manifest.csv backend/data/alerts.parquet
           if git diff --cached --quiet; then
             echo "No data changes — nothing to commit."
           else

@@ -16,10 +16,16 @@ function delayTone(sec) {
   return 'bad'
 }
 
+// Thresholds are provisional: availability_pct_last_year now means "no MBTA alert of
+// any kind was active," which is a much stricter bar than the old schedule-based
+// definition -- real values run 0-63% across lines rather than 85-99%. Rescaled
+// proportionally so the page doesn't render every line as "bad," pending a decision on
+// whether low-severity effect types (elevator outages, minor delay blurbs) should even
+// count against this figure.
 function availabilityTone(p) {
   if (p === null || p === undefined) return 'neutral'
-  if (p >= 95) return 'good'
-  if (p >= 85) return 'warn'
+  if (p >= 50) return 'good'
+  if (p >= 20) return 'warn'
   return 'bad'
 }
 
@@ -43,7 +49,8 @@ export default function Overview() {
           (typical scheduled length for the line + typical delay) — not a per-route answer, and not
           available for a line mid-diversion long enough to still lack a normal-length day to measure
           from. Availability is the trailing {Math.round(data.availability_window_days / 30.44)}-month
-          share of days the line ran its normal, full schedule rather than a reduced/construction one.
+          share of days MBTA had no active service alert for the line, of any kind — see a line's page
+          for what specifically happened on the rest.
         </p>
       </div>
 

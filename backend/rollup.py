@@ -6,16 +6,16 @@ Produces:
 
   data/rollup/overview.json
       One entry per line, blended across direction and hour. Trailing-30-day
-      delay (p50/p90), a guesstimated typical/p90 actual trip time, a trailing-
-      365-day service-availability percentage, and a 30-day daily delay trend
-      for sparklines.
+      delay (p50/p90), a guesstimated typical/p90 actual trip time, the
+      trailing-365-day % of days with no active service-affecting alert, and
+      a 30-day daily delay trend for sparklines.
 
   data/rollup/lines/{line}.json
       One file per line, trailing 365 days, NOT blended across direction --
-      daily delay (p50/p90) split by direction, plus the line's reduced-
-      service closure date ranges and service-anomaly date ranges (see
-      service_availability.py's module docstring for what distinguishes the
-      two) over that same window.
+      daily delay (p50/p90) split by direction, plus the line's alert-derived
+      status ranges (see alert_status.py's module docstring) over that same
+      window: contiguous date ranges each tagged with the winning MBTA alert
+      effect type and a representative explanation.
 
 Written to frontend/public/data -- not committed to the repo (see
 frontend/.gitignore), fully regenerable from data/daily/ and
@@ -43,8 +43,8 @@ import fsspec
 import pandas as pd
 import pyarrow.dataset as ds
 
+import alert_status
 import lamp_ingest
-import service_availability as sa
 
 ROOT = Path(__file__).resolve().parent
 DAILY_DIR = ROOT / "data" / "daily"
@@ -128,63 +128,40 @@ def compute_scheduled_durations(as_of_date: pd.Timestamp) -> pd.Series:
     return duration
 
 
-def _windowed_ranges(all_ranges: list[tuple[str, str, int]], cutoff: pd.Timestamp) -> list[dict]:
-    """Clip a list of (start, end, days) ranges to start no earlier than cutoff+1 day,
-    dropping any that end before the window even begins."""
-    out = [
-        {"start": max(pd.Timestamp(s), cutoff + pd.Timedelta(days=1)).strftime("%Y-%m-%d"), "end": e}
-        for s, e, _d in all_ranges
-        if pd.Timestamp(e) > cutoff
-    ]
-    for c in out:
-        c["days"] = (pd.Timestamp(c["end"]) - pd.Timestamp(c["start"])).days + 1
-    return out
+# Alerts' informed_entity.route_id doesn't distinguish Red Line branches the way our
+# LAMP-derived "line" labels do -- MBTA's alert system tracks "Red" as one route, not
+# separate Ashmont/Braintree route_ids -- so both branches read from the same alert pool.
+ALERT_ROUTE_FOR_LINE = {"Red-A": "Red", "Red-B": "Red"}
 
 
-def compute_availability(delay_lines: list[str]) -> tuple[pd.DataFrame, dict[str, list[dict]], dict[str, list[dict]]]:
-    """Trailing-365-day reduced-service and service-anomaly stats + date ranges per
-    line, restricted to the lines the delay data actually reports on."""
-    print("Loading schedule footprints...", file=sys.stderr)
-    footprints = sa.load_all_footprints()
-    presence, _ = sa.build_presence_matrix(footprints)
-    reduced, classifiable = sa.flag_reduced_days(presence)
+def compute_alert_status(delay_lines: list[str], date_range: pd.DatetimeIndex) -> tuple[pd.DataFrame, dict[str, list[dict]]]:
+    """Trailing-365-day alert-derived status stats + date ranges per line, restricted
+    to the lines the delay data actually reports on."""
+    print("Loading service alerts...", file=sys.stderr)
+    alerts = alert_status.load_alerts()
 
-    print("Loading daily observation counts...", file=sys.stderr)
-    counts = sa.load_daily_obs_counts()
-    counts_wide = sa.build_count_matrix(counts)
-    anomaly, anomaly_classifiable = sa.flag_anomaly_days(counts_wide, reduced)
-
-    cutoff = presence.index.max() - pd.Timedelta(days=LINE_DETAIL_WINDOW_DAYS)
-    lines = [l for l in reduced.columns.get_level_values("line").unique() if l in delay_lines]
+    cutoff = date_range.max() - pd.Timedelta(days=LINE_DETAIL_WINDOW_DAYS)
 
     rows = []
-    closures = {}
-    anomalies = {}
-    for line in lines:
-        line_reduced = reduced.loc[:, (line, slice(None))].any(axis=1)
-        line_classifiable = classifiable.loc[:, (line, slice(None))].any(axis=1)
-        windowed_reduced = line_reduced[(line_reduced.index > cutoff) & line_classifiable]
-        elig = len(windowed_reduced)
-        reduced_days = int(windowed_reduced.sum())
-        pct = round(100 * (1 - reduced_days / elig), 1) if elig else None
+    status_ranges_by_line = {}
+    for line in delay_lines:
+        alert_route = ALERT_ROUTE_FOR_LINE.get(line, line)
+        daily = alert_status.daily_status(alerts, alert_route, date_range)
 
-        anomaly_days = None
-        if line in anomaly.columns:
-            windowed_anomaly = anomaly[line][(anomaly.index > cutoff) & anomaly_classifiable[line]]
-            anomaly_days = int(windowed_anomaly.sum())
+        windowed = daily[daily["date"] > cutoff]
+        total_days = len(windowed)
+        normal_days = int(windowed["effect"].isna().sum())
+        pct = round(100 * normal_days / total_days, 1) if total_days else None
+        rows.append({"line": line, "classifiable_days": total_days, "normal_days": normal_days, "availability_pct": pct})
 
-        rows.append({
-            "line": line,
-            "classifiable_days": elig,
-            "reduced_days": reduced_days,
-            "availability_pct": pct,
-            "anomaly_days": anomaly_days,
-        })
+        clipped = [r for r in alert_status.status_ranges(daily) if pd.Timestamp(r["end"]) > cutoff]
+        for r in clipped:
+            r_start = max(pd.Timestamp(r["start"]), cutoff + pd.Timedelta(days=1))
+            r["start"] = r_start.strftime("%Y-%m-%d")
+            r["days"] = (pd.Timestamp(r["end"]) - r_start).days + 1
+        status_ranges_by_line[line] = clipped
 
-        closures[line] = _windowed_ranges(sa.closure_ranges(reduced, line), cutoff)
-        anomalies[line] = _windowed_ranges(sa.anomaly_ranges(anomaly, line), cutoff) if line in anomaly.columns else []
-
-    return pd.DataFrame(rows), closures, anomalies
+    return pd.DataFrame(rows), status_ranges_by_line
 
 
 def build_overview(delay: pd.DataFrame, availability: pd.DataFrame) -> pd.DataFrame:
@@ -222,8 +199,7 @@ def build_overview(delay: pd.DataFrame, availability: pd.DataFrame) -> pd.DataFr
             "p90_trip_sec": nullable(row["p90_trip_sec"]),
             "n_observations": int(row["delay_n"]),
             "availability_pct_last_year": nullable(row.get("availability_pct")),
-            "reduced_days_last_year": nullable(row.get("reduced_days")),
-            "anomaly_days_last_year": nullable(row.get("anomaly_days")),
+            "normal_days_last_year": nullable(row.get("normal_days")),
             "classifiable_days_last_year": nullable(row.get("classifiable_days")),
             "trend": trend,
         })
@@ -242,7 +218,7 @@ def build_overview(delay: pd.DataFrame, availability: pd.DataFrame) -> pd.DataFr
     return current
 
 
-def build_line_detail(delay: pd.DataFrame, closures: dict[str, list[dict]], anomalies: dict[str, list[dict]]) -> None:
+def build_line_detail(delay: pd.DataFrame, status_ranges: dict[str, list[dict]]) -> None:
     lines_dir = OUTPUT_DIR / "lines"
     lines_dir.mkdir(parents=True, exist_ok=True)
 
@@ -250,10 +226,8 @@ def build_line_detail(delay: pd.DataFrame, closures: dict[str, list[dict]], anom
     cutoff = (max_date - pd.Timedelta(days=LINE_DETAIL_WINDOW_DAYS)).strftime("%Y-%m-%d")
     delay = delay[delay["service_date"] >= cutoff]
 
-    # Daily, not weekly, resolution -- see service_availability.py's own note on why
-    # smoothing away a real sharp step-change is the wrong tradeoff for a chart. Same
-    # principle applies here: a genuine sudden delay spike should read as a cliff, not
-    # get blended across the days around it.
+    # Daily, not weekly, resolution -- a genuine sudden delay spike should read as a
+    # cliff on the chart, not get smoothed across the days around it.
     daily_delay_p50 = weighted_percentile_blend(delay, "delay_p50_sec", "n", ["line", "route_id", "direction_id", "service_date"])
     daily_delay_p90 = weighted_percentile_blend(delay, "delay_p90_sec", "n", ["line", "route_id", "direction_id", "service_date"])
     daily_delay = pd.concat([daily_delay_p50, daily_delay_p90], axis=1).reset_index()
@@ -272,8 +246,7 @@ def build_line_detail(delay: pd.DataFrame, closures: dict[str, list[dict]], anom
                 "line": line,
                 "route_id": d["route_id"].iloc[0] if not d.empty else line,
                 "by_direction": by_direction,
-                "closures": closures.get(line, []),
-                "anomalies": anomalies.get(line, []),
+                "status_ranges": status_ranges.get(line, []),
             }, f, indent=2)
 
     print(f"Wrote {lines_dir} ({daily_delay['line'].nunique()} lines)", file=sys.stderr)
@@ -288,10 +261,11 @@ def main() -> None:
     # always resolves to Red-A or Red-B.
     delay = delay[delay["line"] != "Red"]
     delay_lines = sorted(delay["line"].unique())
+    date_range = pd.date_range(pd.to_datetime(delay["service_date"]).min(), pd.to_datetime(delay["service_date"]).max(), freq="D")
 
-    availability, closures, anomalies = compute_availability(delay_lines)
+    availability, status_ranges = compute_alert_status(delay_lines, date_range)
     build_overview(delay, availability)
-    build_line_detail(delay, closures, anomalies)
+    build_line_detail(delay, status_ranges)
 
 
 if __name__ == "__main__":

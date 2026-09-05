@@ -1,5 +1,6 @@
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend, ReferenceArea } from 'recharts'
 import { formatDate } from '../lib/format'
+import { effectColor } from '../lib/alertEffects'
 
 // A handful of genuine outlier days (unbounded seconds, e.g. a severe single-day
 // delay) can otherwise stretch the axis so far that the normal range is crushed into
@@ -28,10 +29,10 @@ function robustDomain(data, dataKeys) {
 // 'YYYY-MM-DD' parses as UTC midnight per the ISO 8601 spec, so this is a stable,
 // timezone-independent numeric x-value -- unlike a category-string axis, where recharts'
 // ReferenceArea silently fails to resolve most x1/x2 values to a position. Confirmed by
-// inspection: with dataKey="service_date" as a category axis, most closures' reference
-// rects rendered at x=0 (the chart's left edge) instead of their actual date -- only 2 of
-// 11 for one Red-A chart resolved correctly. A numeric axis sidesteps that category
-// lookup entirely; day differences interpolate as real pixel positions.
+// inspection: with dataKey="service_date" as a category axis, most status ranges'
+// reference rects rendered at x=0 (the chart's left edge) instead of their actual date --
+// only 2 of 11 for one Red-A chart resolved correctly. A numeric axis sidesteps that
+// category lookup entirely; day differences interpolate as real pixel positions.
 function toEpochDay(dateStr) {
   return Date.parse(dateStr + 'T00:00:00Z')
 }
@@ -42,40 +43,23 @@ function fromEpochDay(t) {
 
 const DAY_MS = 24 * 60 * 60 * 1000
 
-// Delay figures computed during a reduced-service/diversion day, OR a service-anomaly
-// day, aren't trustworthy -- confirmed by inspection during the DST bug investigation
-// that realtime-to-schedule matching degrades badly on those days (observation counts
-// collapsing, wildly implausible medians), because the trips actually running often
-// don't correspond cleanly to the schedule they're being matched against. A service
-// anomaly is by definition a day where that same collapse happened (that's the signal
-// used to detect it), so it needs the same treatment. Rather than plot that noise, null
-// out every line's value on those dates so the chart shows a real gap -- the shaded band
-// explains why, instead of a data point implying a reading that isn't real.
-function maskFlaggedDates(data, ranges, dataKeys) {
-  if (!ranges.length) return data
-  return data.map((d) => {
-    const flagged = ranges.some((r) => d.service_date >= r.start && d.service_date <= r.end)
-    if (!flagged) return d
-    const masked = { ...d }
-    for (const key of dataKeys) masked[key] = null
-    return masked
-  })
-}
-
-// closures and anomalies (from service_availability.py -- see its module docstring for
-// what distinguishes the two) are rendered as shaded bands behind the delay lines rather
-// than a separate chart -- the whole point of tracking both metrics together is seeing
-// whether a delay spike lines up with a real schedule reduction or happened on an
-// otherwise-normal day, which a side-by-side chart makes the reader do the correlating
-// for themselves.
-export default function TrendChart({ data, lines, yLabel, tooltipFormatter, domain, closures = [], anomalies = [] }) {
+// statusRanges (from alert_status.py) are rendered as shaded bands behind the delay
+// lines rather than a separate chart -- the whole point of tracking both together is
+// seeing whether a delay spike lines up with a real service alert or happened on an
+// otherwise-normal day, which a shared chart shows at a glance instead of making the
+// reader cross-reference two charts. Delay figures are NOT blanked out during a
+// flagged period -- unlike the schedule-footprint/match-rate signals this replaced,
+// not every alert effect necessarily makes the day's delay figure untrustworthy (e.g.
+// SIGNIFICANT_DELAYS is a real, meaningful delay reading, not noise), so suppressing
+// data is deferred to a future per-effect decision rather than applied uniformly here.
+export default function TrendChart({ data, lines, yLabel, tooltipFormatter, domain, statusRanges = [] }) {
   const dataKeys = lines.map((l) => l.dataKey)
-  const maskedData = maskFlaggedDates(maskFlaggedDates(data, closures, dataKeys), anomalies, dataKeys).map((d) => ({ ...d, _t: toEpochDay(d.service_date) }))
-  const yDomain = domain ?? robustDomain(maskedData, dataKeys)
+  const chartData = data.map((d) => ({ ...d, _t: toEpochDay(d.service_date) }))
+  const yDomain = domain ?? robustDomain(chartData, dataKeys)
 
   return (
     <ResponsiveContainer width="100%" height={320}>
-      <LineChart data={maskedData} margin={{ top: 8, right: 16, left: 8, bottom: 8 }}>
+      <LineChart data={chartData} margin={{ top: 8, right: 16, left: 8, bottom: 8 }}>
         <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
         <XAxis
           dataKey="_t"
@@ -92,11 +76,8 @@ export default function TrendChart({ data, lines, yLabel, tooltipFormatter, doma
           contentStyle={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 6 }}
         />
         <Legend />
-        {closures.map((c) => (
-          <ReferenceArea key={`c-${c.start}`} x1={toEpochDay(c.start)} x2={toEpochDay(c.end) + DAY_MS} fill="var(--bad)" fillOpacity={0.15} strokeOpacity={0} ifOverflow="visible" />
-        ))}
-        {anomalies.map((a) => (
-          <ReferenceArea key={`a-${a.start}`} x1={toEpochDay(a.start)} x2={toEpochDay(a.end) + DAY_MS} fill="var(--warn)" fillOpacity={0.15} strokeOpacity={0} ifOverflow="visible" />
+        {statusRanges.map((r) => (
+          <ReferenceArea key={`${r.start}-${r.effect}`} x1={toEpochDay(r.start)} x2={toEpochDay(r.end) + DAY_MS} fill={effectColor(r.effect)} fillOpacity={0.15} strokeOpacity={0} ifOverflow="visible" />
         ))}
         {lines.map((l) => (
           <Line
@@ -108,6 +89,7 @@ export default function TrendChart({ data, lines, yLabel, tooltipFormatter, doma
             strokeWidth={1.75}
             dot={false}
             isAnimationActive={false}
+            connectNulls
           />
         ))}
       </LineChart>

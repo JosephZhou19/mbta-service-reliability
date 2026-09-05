@@ -86,7 +86,7 @@ export default function Leaderboard() {
                 {sortedCol.trendKey ? (
                   <Sparkline data={l.trend} dataKey={sortedCol.trendKey} color={lineColor(l.line)} />
                 ) : (
-                  <span className="sparkline-empty">{l.reduced_days_last_year} reduced day{l.reduced_days_last_year === 1 ? '' : 's'}</span>
+                  <span className="sparkline-empty">{l.classifiable_days_last_year - l.normal_days_last_year} affected day{l.classifiable_days_last_year - l.normal_days_last_year === 1 ? '' : 's'}</span>
                 )}
               </td>
             </tr>

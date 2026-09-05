@@ -34,16 +34,15 @@ export default function LineDetail() {
         <p className="page-subtitle">
           Trailing 12 months, one point per service day. The y-axis is clipped to a typical range so a
           handful of severe-delay days don't flatten the rest of the chart — hover any point for its
-          exact value; nothing is hidden, just scaled for readability. Reduced-service and service-
-          anomaly days (defined below, and shown as a calendar) are left blank on the delay chart
-          rather than plotted — on those days, too few real trips matched the schedule for a delay
-          figure to mean anything.
+          exact value; nothing is hidden, just scaled for readability. Shaded bands (and the calendar
+          below) mark days MBTA had an active service alert for this line — see the legend for what
+          each color means.
         </p>
       </div>
 
       <div className="chart-block">
         <h3>Service calendar (trailing 12 months)</h3>
-        <ServiceCalendar startDate={startDate} endDate={endDate} closures={data.closures} anomalies={data.anomalies} />
+        <ServiceCalendar startDate={startDate} endDate={endDate} statusRanges={data.status_ranges} />
       </div>
 
       {directions.map((dir) => (
@@ -60,8 +59,7 @@ export default function LineDetail() {
               ]}
               yLabel="seconds"
               tooltipFormatter={(v) => `${(v / 60).toFixed(1)} min`}
-              closures={data.closures}
-              anomalies={data.anomalies}
+              statusRanges={data.status_ranges}
             />
           </div>
         </section>
