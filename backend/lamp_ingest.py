@@ -24,12 +24,21 @@ the same state.
 
 Delay is summarized at route+branch+direction+hour+day grain (hour bucketed
 by the SCHEDULED time, so a very late train doesn't get miscategorized into
-a different hour than a rider would have expected it in). Delivery rate is
-summarized at route+branch+direction+day grain only (no hour) — not because
+a different hour than a rider would have expected it in). Schedule footprint
+(which stops the published schedule actually calls at, per line+direction+day
+— the input to service_availability.py's reduced-service detection) is
+recorded at route+branch+direction+day grain only (no hour) — not because
 LAMP_static_stop_times.parquet is too large to use (predicate pushdown over
 HTTP makes a day's filtered read <1s, well under 1MB), but because it isn't
-needed for that grain; adding an hour breakdown to delivery rate later is a
-small extension of compute_delivery_summary, not a redesign.
+needed for that grain.
+
+Delivery rate (observed vs. scheduled stop-visits) was tracked here too in an
+earlier version, and dropped: schedule-footprint-based reduced-service
+detection (service_availability.py) turned out to explain construction/
+diversion-driven shortfall more precisely and more legibly than a bare
+percentage did, and genuine random cancellations on an otherwise-normal day
+are rare enough to show up as a delay spike rather than needing their own
+metric.
 
 Usage:
     python scripts/lamp_ingest.py                 # reconcile: process anything missing/stale
@@ -227,62 +236,6 @@ def compute_schedule_footprint(st: pd.DataFrame, service_date_str: str) -> pd.Da
     return footprint
 
 
-def compute_delivery_summary(df: pd.DataFrame, service_date_str: str, st: pd.DataFrame, scheduled_trips: pd.DataFrame) -> pd.DataFrame:
-    """Delivery rate = observed stop-visits / scheduled stop-visits, NOT trip counts.
-
-    Trip-counting was tried first and rejected: MBTA operational short-turns and
-    schedule adjustments (esp. on Green Line) generate more distinct trip_ids in the
-    realtime data than the static schedule has trips, producing nonsense delivery
-    rates over 250%. Comparing stop VISITS instead needs no trip-identity linking at
-    all — a short-turned trip simply contributes fewer observed visits to the stops
-    it never reached, which is exactly the right behavior, not an edge case to patch.
-    """
-    if scheduled_trips.empty or st.empty:
-        return pd.DataFrame()
-
-    scheduled_counts = st.groupby(["line", "route_id", "direction_id"], observed=True).size().rename("scheduled_visits")
-
-    # scheduled_arrival_time.notna() is NOT sufficient on its own: LAMP populates it
-    # with a best-effort nearby-slot guess even for ADDED- trip_ids that aren't in the
-    # static schedule at all (confirmed by inspection — e.g. 1,485 of 2,486 "matched"
-    # Red-A rows on one date had ADDED- ids absent from every schedule version). Counting
-    # those inflates observed_visits past scheduled_visits, which is structurally
-    # impossible for a real trip. Restricting to trip_ids actually in our scheduled
-    # roster makes observed <= scheduled true by construction, not just by luck.
-    # Join (not just membership-check) against the roster: this also gives us the
-    # roster's own direction_id to group by. The observed row's OWN direction_id can't
-    # be trusted for this — confirmed by inspection that LAMP's realtime and static
-    # sides disagree on direction_id for the same trip_id often enough to matter (one
-    # date: 62 trips reported as dir=1 in realtime data but scheduled as dir=0),
-    # which was silently corrupting the per-direction split even after the roster
-    # membership restriction above. The scheduled roster is the source of truth here.
-    obs = df.loc[df["scheduled_arrival_time"].notna(), ["trip_id", "stop_sequence"]].merge(
-        scheduled_trips[["trip_id", "line", "route_id", "direction_id"]], on="trip_id", how="inner"
-    )
-    # Belt-and-suspenders: a duplicate (trip_id, stop_sequence) observed row would still
-    # slip past the roster restriction above, so drop exact repeats defensively.
-    obs = obs.drop_duplicates(subset=["trip_id", "stop_sequence"])
-    observed_counts = obs.groupby(["line", "route_id", "direction_id"], observed=True).size().rename("observed_visits")
-
-    combined = pd.concat([scheduled_counts, observed_counts], axis=1).fillna(0)
-    # A handful of observed rows carry no branch_route_id even on branching routes (an
-    # unresolved realtime-matching gap on MBTA's side) and fall back to the bare route_id
-    # as "line" — with no scheduled counterpart under that label, that's an unattributable
-    # remainder, not a real 0-scheduled service. Drop rather than show an infinite rate.
-    combined = combined[combined["scheduled_visits"] > 0]
-    combined["observed_visits"] = combined["observed_visits"].astype(int)
-    combined["delivery_pct"] = (100 * combined["observed_visits"] / combined["scheduled_visits"]).round(1)
-    # >100% is basically definitionally suspect for this metric (rare genuine extra
-    # service aside) — seen concentrated in some historical periods (2020 COVID-era
-    # service changes are the leading suspect, unconfirmed) rather than spread evenly,
-    # meaning it's a data/matching quality issue for that date, not a real finding.
-    # Flag rather than silently publish or silently drop.
-    combined["suspect"] = combined["delivery_pct"] > 105
-    combined = combined.reset_index()
-    combined.insert(0, "service_date", service_date_str)
-    return combined
-
-
 def process_date(service_date_str: str, file_url: str, svc_by_date_route: pd.DataFrame, static_trips: pd.DataFrame) -> str:
     """Returns a status string: 'ok', 'empty', or 'error: ...'."""
     try:
@@ -292,14 +245,12 @@ def process_date(service_date_str: str, file_url: str, svc_by_date_route: pd.Dat
 
     DAILY_DIR.mkdir(parents=True, exist_ok=True)
     delay_path = DAILY_DIR / f"{service_date_str}-delay.parquet"
-    delivery_path = DAILY_DIR / f"{service_date_str}-delivery.parquet"
     stops_path = DAILY_DIR / f"{service_date_str}-stops.parquet"
 
     if len(df) == 0:
         # Overwrite with empty frames so a previously-good day that somehow
         # regressed to empty doesn't leave stale data behind.
         pd.DataFrame().to_parquet(delay_path)
-        pd.DataFrame().to_parquet(delivery_path)
         pd.DataFrame().to_parquet(stops_path)
         return "empty"
 
@@ -307,13 +258,11 @@ def process_date(service_date_str: str, file_url: str, svc_by_date_route: pd.Dat
         delay = compute_delay_summary(df, service_date_str)
         scheduled_trips = build_scheduled_roster(service_date_str, svc_by_date_route, static_trips)
         st = fetch_scheduled_stop_times(scheduled_trips) if not scheduled_trips.empty else pd.DataFrame()
-        delivery = compute_delivery_summary(df, service_date_str, st, scheduled_trips)
         footprint = compute_schedule_footprint(st, service_date_str)
     except Exception as e:
         return f"error: computation failed ({e})"
 
     delay.to_parquet(delay_path)
-    delivery.to_parquet(delivery_path)
     footprint.to_parquet(stops_path)
     return "ok"
 
