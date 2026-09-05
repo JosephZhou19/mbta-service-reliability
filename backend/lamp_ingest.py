@@ -169,15 +169,12 @@ def compute_delay_summary(df: pd.DataFrame, service_date_str: str) -> pd.DataFra
     return stats
 
 
-def compute_delivery_summary(df: pd.DataFrame, service_date_str: str, svc_by_date_route: pd.DataFrame, static_trips: pd.DataFrame) -> pd.DataFrame:
-    """Delivery rate = observed stop-visits / scheduled stop-visits, NOT trip counts.
-
-    Trip-counting was tried first and rejected: MBTA operational short-turns and
-    schedule adjustments (esp. on Green Line) generate more distinct trip_ids in the
-    realtime data than the static schedule has trips, producing nonsense delivery
-    rates over 250%. Comparing stop VISITS instead needs no trip-identity linking at
-    all — a short-turned trip simply contributes fewer observed visits to the stops
-    it never reached, which is exactly the right behavior, not an edge case to patch.
+def build_scheduled_roster(service_date_str: str, svc_by_date_route: pd.DataFrame, static_trips: pd.DataFrame) -> pd.DataFrame:
+    """The set of trips actually scheduled to run on service_date_str, one row per
+    trip_id, with 'line' resolved to branch_route_id where one exists (Red) and
+    route_id otherwise (Green's branches are already distinct route_ids). Shared by
+    delivery-rate and schedule-footprint computation so both agree on exactly which
+    trips count as "scheduled" for the day.
     """
     date_int = int(service_date_str.replace("-", ""))
     day_svc = svc_by_date_route[svc_by_date_route.service_date == date_int]
@@ -200,11 +197,49 @@ def compute_delivery_summary(df: pd.DataFrame, service_date_str: str, svc_by_dat
     # rather than let them land in an unattributable bucket.
     scheduled_trips = scheduled_trips[~((scheduled_trips["route_id"] == "Red") & scheduled_trips["branch_route_id"].isna())]
     scheduled_trips["line"] = scheduled_trips["branch_route_id"].fillna(scheduled_trips["route_id"])
+    return scheduled_trips
 
+
+def fetch_scheduled_stop_times(scheduled_trips: pd.DataFrame) -> pd.DataFrame:
+    """Every (trip, stop) the static schedule calls for on the day scheduled_trips
+    represents, with line/route/direction attached. Predicate-pushed over HTTP by
+    static_version_key, so this stays a sub-second, <1MB read despite the source
+    table being 2GB+ (see STATIC_STOP_TIMES_URL comment)."""
     version_keys = scheduled_trips["static_version_key"].unique().tolist()
     stop_times_dataset = ds.dataset(STATIC_STOP_TIMES_URL, filesystem=HTTP_FS, format="parquet")
     st = stop_times_dataset.to_table(filter=ds.field("static_version_key").isin(version_keys)).to_pandas()
     st = st.merge(scheduled_trips[["trip_id", "static_version_key", "line", "route_id", "direction_id"]], on=["trip_id", "static_version_key"])
+    return st
+
+
+def compute_schedule_footprint(st: pd.DataFrame, service_date_str: str) -> pd.DataFrame:
+    """Which stops the published schedule actually calls at for each line+direction
+    on this service date — the raw fact behind service-availability detection. A
+    shuttle-bus diversion or construction closure shows up here as stops silently
+    missing from the day's schedule, distinct from delivery-rate's day-of shortfall
+    against a schedule that was otherwise normal. One row per (line, direction, stop)
+    actually scheduled; interpreting "missing vs. this line's normal stop set" is a
+    rollup-time concern, not this ingestion step's."""
+    if st.empty:
+        return pd.DataFrame()
+    footprint = st[["line", "route_id", "direction_id", "stop_id"]].drop_duplicates().reset_index(drop=True)
+    footprint.insert(0, "service_date", service_date_str)
+    return footprint
+
+
+def compute_delivery_summary(df: pd.DataFrame, service_date_str: str, st: pd.DataFrame, scheduled_trips: pd.DataFrame) -> pd.DataFrame:
+    """Delivery rate = observed stop-visits / scheduled stop-visits, NOT trip counts.
+
+    Trip-counting was tried first and rejected: MBTA operational short-turns and
+    schedule adjustments (esp. on Green Line) generate more distinct trip_ids in the
+    realtime data than the static schedule has trips, producing nonsense delivery
+    rates over 250%. Comparing stop VISITS instead needs no trip-identity linking at
+    all — a short-turned trip simply contributes fewer observed visits to the stops
+    it never reached, which is exactly the right behavior, not an edge case to patch.
+    """
+    if scheduled_trips.empty or st.empty:
+        return pd.DataFrame()
+
     scheduled_counts = st.groupby(["line", "route_id", "direction_id"], observed=True).size().rename("scheduled_visits")
 
     # scheduled_arrival_time.notna() is NOT sufficient on its own: LAMP populates it
@@ -258,22 +293,28 @@ def process_date(service_date_str: str, file_url: str, svc_by_date_route: pd.Dat
     DAILY_DIR.mkdir(parents=True, exist_ok=True)
     delay_path = DAILY_DIR / f"{service_date_str}-delay.parquet"
     delivery_path = DAILY_DIR / f"{service_date_str}-delivery.parquet"
+    stops_path = DAILY_DIR / f"{service_date_str}-stops.parquet"
 
     if len(df) == 0:
         # Overwrite with empty frames so a previously-good day that somehow
         # regressed to empty doesn't leave stale data behind.
         pd.DataFrame().to_parquet(delay_path)
         pd.DataFrame().to_parquet(delivery_path)
+        pd.DataFrame().to_parquet(stops_path)
         return "empty"
 
     try:
         delay = compute_delay_summary(df, service_date_str)
-        delivery = compute_delivery_summary(df, service_date_str, svc_by_date_route, static_trips)
+        scheduled_trips = build_scheduled_roster(service_date_str, svc_by_date_route, static_trips)
+        st = fetch_scheduled_stop_times(scheduled_trips) if not scheduled_trips.empty else pd.DataFrame()
+        delivery = compute_delivery_summary(df, service_date_str, st, scheduled_trips)
+        footprint = compute_schedule_footprint(st, service_date_str)
     except Exception as e:
         return f"error: computation failed ({e})"
 
     delay.to_parquet(delay_path)
     delivery.to_parquet(delivery_path)
+    footprint.to_parquet(stops_path)
     return "ok"
 
 
