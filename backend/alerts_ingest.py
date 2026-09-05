@@ -7,10 +7,16 @@ the live GTFS-RT alerts feed repeatedly for as long as an alert stays active --
 confirmed by inspection, one real-world Green Line closure appeared as 320 nearly
 identical rows spanning its ~6-week active period. `id` is stable across every
 snapshot of the same alert (unlike header text, which MBTA re-words over time as an
-incident develops), so collapsing to one row per (id, route, direction) is exact,
-not a heuristic. This is unlike lamp_ingest.py's per-day reconciliation: alerts
-already come with their own start/end, so there's no daily manifest to track --
-each run just re-fetches, re-dedupes, and overwrites the whole table.
+incident develops), but is NOT unique to a single occurrence -- confirmed by a real
+bug, MBTA reuses the same id for a genuinely recurring pattern (e.g. a nightly
+~6-hour bypass repeated over many weeks), issuing a new start/end each time it
+recurs. An earlier version deduped on (id, route, direction) alone and took the max
+end ever seen, which stitched ~90 separate 6-hour overnight occurrences of one such
+alert into a fake 357-day continuous closure. `start` is part of the dedup key now
+(see fetch_and_dedupe) so distinct recurrences stay distinct. This is unlike
+lamp_ingest.py's per-day reconciliation: alerts already come with their own
+start/end, so there's no daily manifest to track -- each run just re-fetches,
+re-dedupes, and overwrites the whole table.
 
 Restricted to the 9 lines and the 2023-01-01+ window this project already covers,
 via predicate pushdown -- the source file is 130MB+ across every route MBTA runs
@@ -69,7 +75,16 @@ def fetch_and_dedupe() -> pd.DataFrame:
     if df.empty:
         return df
 
-    group_keys = ["id", "informed_entity.route_id", "informed_entity.direction_id"]
+    # `start` is part of the group key, not just id/route/direction -- confirmed by
+    # inspection that MBTA reuses the SAME alert id for a genuinely recurring pattern
+    # (e.g. a nightly ~6-hour bypass repeated over many weeks), issuing a new start/end
+    # each time it recurs. Grouping by id alone and taking the max end ever seen
+    # stitched ~90 separate 6-hour overnight occurrences of one such alert into a fake
+    # 357-day continuous closure. Grouping by start too keeps genuinely distinct
+    # recurrences as separate rows, while still correctly collapsing repeated snapshots
+    # of the SAME still-ongoing occurrence (identical start, end creeping forward as
+    # it's periodically re-polled) into one.
+    group_keys = ["id", "informed_entity.route_id", "informed_entity.direction_id", "active_period.start_datetime"]
     df = df.sort_values("last_modified_datetime")
     # dropna=False: direction_id is legitimately null for a line-wide (not
     # direction-specific) alert -- the default dropna=True would silently exclude
