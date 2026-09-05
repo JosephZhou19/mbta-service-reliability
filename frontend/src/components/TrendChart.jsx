@@ -25,6 +25,23 @@ function robustDomain(data, dataKeys) {
   return [Math.floor(lo - pad), Math.ceil(hi + pad)]
 }
 
+// 'YYYY-MM-DD' parses as UTC midnight per the ISO 8601 spec, so this is a stable,
+// timezone-independent numeric x-value -- unlike a category-string axis, where recharts'
+// ReferenceArea silently fails to resolve most x1/x2 values to a position. Confirmed by
+// inspection: with dataKey="service_date" as a category axis, most closures' reference
+// rects rendered at x=0 (the chart's left edge) instead of their actual date -- only 2 of
+// 11 for one Red-A chart resolved correctly. A numeric axis sidesteps that category
+// lookup entirely; day differences interpolate as real pixel positions.
+function toEpochDay(dateStr) {
+  return Date.parse(dateStr + 'T00:00:00Z')
+}
+
+function fromEpochDay(t) {
+  return new Date(t).toISOString().slice(0, 10)
+}
+
+const DAY_MS = 24 * 60 * 60 * 1000
+
 // Delay figures computed during a reduced-service/diversion day aren't trustworthy --
 // confirmed by inspection during the DST bug investigation that realtime-to-schedule
 // matching degrades badly on those days (observation counts collapsing, wildly
@@ -50,7 +67,7 @@ function maskClosureDates(data, closures, dataKeys) {
 // makes the reader do the correlating for themselves.
 export default function TrendChart({ data, lines, yLabel, tooltipFormatter, domain, closures = [] }) {
   const dataKeys = lines.map((l) => l.dataKey)
-  const maskedData = maskClosureDates(data, closures, dataKeys)
+  const maskedData = maskClosureDates(data, closures, dataKeys).map((d) => ({ ...d, _t: toEpochDay(d.service_date) }))
   const yDomain = domain ?? robustDomain(maskedData, dataKeys)
 
   return (
@@ -58,20 +75,22 @@ export default function TrendChart({ data, lines, yLabel, tooltipFormatter, doma
       <LineChart data={maskedData} margin={{ top: 8, right: 16, left: 8, bottom: 8 }}>
         <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
         <XAxis
-          dataKey="service_date"
-          tickFormatter={formatDate}
+          dataKey="_t"
+          type="number"
+          domain={['dataMin', 'dataMax']}
+          tickFormatter={(t) => formatDate(fromEpochDay(t))}
           minTickGap={40}
           stroke="var(--text-muted)"
         />
         <YAxis stroke="var(--text-muted)" domain={yDomain} label={{ value: yLabel, angle: -90, position: 'insideLeft', fill: 'var(--text-muted)' }} />
         <Tooltip
-          labelFormatter={formatDate}
+          labelFormatter={(t) => formatDate(fromEpochDay(t))}
           formatter={tooltipFormatter}
           contentStyle={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 6 }}
         />
         <Legend />
         {closures.map((c) => (
-          <ReferenceArea key={c.start} x1={c.start} x2={c.end} fill="var(--bad)" fillOpacity={0.12} strokeOpacity={0} ifOverflow="visible" />
+          <ReferenceArea key={c.start} x1={toEpochDay(c.start)} x2={toEpochDay(c.end) + DAY_MS} fill="var(--bad)" fillOpacity={0.15} strokeOpacity={0} ifOverflow="visible" />
         ))}
         {lines.map((l) => (
           <Line
