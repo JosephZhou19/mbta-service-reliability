@@ -403,26 +403,47 @@ h2 + .page-subtitle {
   font-weight: 600;
 }
 
-/* ServiceCalendar */
-.service-calendar {
-  max-width: 100%;
-  overflow-x: auto;
-}
-
-.service-calendar-months {
-  position: relative;
-  height: 14px;
-  font-size: 0.7rem;
+.chart-legend {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 4px 14px;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  font-size: 0.78rem;
   color: var(--text-muted);
 }
 
-.service-calendar-months span {
-  position: absolute;
-  top: 0;
+.chart-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.chart-legend-swatch {
+  width: 9px;
+  height: 9px;
+  border-radius: 2px;
+  flex-shrink: 0;
+}
+
+/* ServiceCalendar -- the svg has viewBox + width:100% (no fixed pixel width), so it
+   scales down to fit a narrow screen instead of needing horizontal scroll; max-width
+   caps it at its natural size so it doesn't blow up past that on a wide desktop. */
+.service-calendar {
+  max-width: 100%;
 }
 
 .service-calendar-grid {
   display: block;
+  width: 100%;
+  height: auto;
+}
+
+.calendar-month-label {
+  font-size: 9px;
+  fill: var(--text-muted);
 }
 
 .calendar-tooltip {

@@ -1,6 +1,23 @@
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend, ReferenceArea, ReferenceLine, Brush } from 'recharts'
 import { formatDate } from '../lib/format'
 import { effectColor, MASKS_DELAY_DATA } from '../lib/alertEffects'
+import { useIsMobile } from '../lib/useIsMobile'
+
+// Recharts' default Legend doesn't fit "Bad day (90th pct.)" + "Typical day" on one
+// line at phone width and wraps them awkwardly. A plain flex row wraps on its own
+// terms instead, staying compact either way.
+function CompactLegend({ payload }) {
+  return (
+    <ul className="chart-legend">
+      {payload.map((entry) => (
+        <li key={entry.value} className="chart-legend-item">
+          <span className="chart-legend-swatch" style={{ background: entry.color }} />
+          {entry.value}
+        </li>
+      ))}
+    </ul>
+  )
+}
 
 // A handful of outlier days can stretch the axis so far the normal range is crushed
 // into a sliver. Clip to the 2nd-98th percentile with padding -- every point still
@@ -64,13 +81,14 @@ function maskUntrustworthyDates(data, statusRanges, dataKeys) {
 // narrower date range (a month, a week) without re-fetching -- all 12 months of data
 // stays loaded, the brush just changes which slice the chart above renders.
 export default function TrendChart({ data, lines, yLabel, tooltipFormatter, yTickFormatter, domain, statusRanges = [], zeroLine = false }) {
+  const isMobile = useIsMobile()
   const dataKeys = lines.map((l) => l.dataKey)
   const chartData = maskUntrustworthyDates(data, statusRanges, dataKeys).map((d) => ({ ...d, _t: toEpochDay(d.service_date) }))
   const baseDomain = domain ?? robustDomain(chartData, dataKeys)
   const yDomain = zeroLine ? includeZero(baseDomain) : baseDomain
 
   return (
-    <ResponsiveContainer width="100%" height={400}>
+    <ResponsiveContainer width="100%" height={isMobile ? 300 : 400}>
       <LineChart data={chartData} margin={{ top: 24, right: 16, left: 8, bottom: 8 }}>
         <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
         <XAxis
@@ -93,7 +111,7 @@ export default function TrendChart({ data, lines, yLabel, tooltipFormatter, yTic
           formatter={tooltipFormatter}
           contentStyle={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 6 }}
         />
-        <Legend verticalAlign="top" height={32} />
+        <Legend verticalAlign="top" height={isMobile ? 40 : 28} content={<CompactLegend />} />
         {zeroLine && <ReferenceLine y={0} stroke="var(--text-muted)" strokeDasharray="4 4" />}
         {statusRanges.map((r) => (
           // "hidden" (not "visible"): a band whose range extends past the current

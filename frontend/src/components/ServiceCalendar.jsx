@@ -5,6 +5,7 @@ import { formatDate } from '../lib/format'
 const DAY_MS = 24 * 60 * 60 * 1000
 const CELL = 11
 const GAP = 3
+const MONTH_LABEL_HEIGHT = 16
 
 function parseDate(s) {
   return new Date(s + 'T00:00:00')
@@ -66,6 +67,8 @@ export default function ServiceCalendar({ startDate, endDate, statusRanges = [] 
   }, [startDate, endDate, dayStatus])
 
   const gridWidth = weeks.length * (CELL + GAP)
+  const gridHeight = 7 * (CELL + GAP)
+  const totalHeight = MONTH_LABEL_HEIGHT + gridHeight
 
   const legendEffects = useMemo(
     () => [...new Set(statusRanges.map((r) => r.effect))].sort((a, b) => effectLabel(a).localeCompare(effectLabel(b))),
@@ -83,27 +86,35 @@ export default function ServiceCalendar({ startDate, endDate, statusRanges = [] 
     return day.status ? 1 : 0.35
   }
 
+  // A tap fires as a click on every device (touch included), so it's the one
+  // handler that reliably shows the tooltip on a phone -- hover has no touch
+  // equivalent and was previously the only way to see a day's date there.
+  function showTooltip(e, day) {
+    if (day.inRange) setHover({ x: e.clientX, y: e.clientY, day })
+  }
+
   return (
-    <div className="service-calendar" style={{ width: gridWidth }}>
-      <div className="service-calendar-months">
+    <div className="service-calendar" style={{ maxWidth: gridWidth }}>
+      <svg viewBox={`0 0 ${gridWidth} ${totalHeight}`} width="100%" className="service-calendar-grid">
         {monthLabels.map((m) => (
-          <span key={m.weekIndex} style={{ left: m.weekIndex * (CELL + GAP) }}>{m.label}</span>
+          <text key={m.weekIndex} x={m.weekIndex * (CELL + GAP)} y={MONTH_LABEL_HEIGHT - 5} className="calendar-month-label">
+            {m.label}
+          </text>
         ))}
-      </div>
-      <svg width={gridWidth} height={7 * (CELL + GAP)} className="service-calendar-grid">
         {weeks.map((week, wi) =>
           week.map((day) => (
             <rect
               key={day.date}
               x={wi * (CELL + GAP)}
-              y={day.dow * (CELL + GAP)}
+              y={MONTH_LABEL_HEIGHT + day.dow * (CELL + GAP)}
               width={CELL}
               height={CELL}
               rx={2}
               fill={cellFill(day)}
               fillOpacity={cellOpacity(day)}
-              onMouseEnter={(e) => day.inRange && setHover({ x: e.clientX, y: e.clientY, day })}
-              onMouseMove={(e) => day.inRange && setHover({ x: e.clientX, y: e.clientY, day })}
+              onClick={(e) => showTooltip(e, day)}
+              onMouseEnter={(e) => showTooltip(e, day)}
+              onMouseMove={(e) => showTooltip(e, day)}
               onMouseLeave={() => setHover(null)}
             />
           )),

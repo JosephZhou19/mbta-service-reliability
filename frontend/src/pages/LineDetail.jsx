@@ -73,8 +73,8 @@ export default function LineDetail() {
 
       <h2>Disruption Calendar</h2>
       <p className="page-subtitle">
-          Every day over the last 12 months, colored by what MBTA reported for this line. Hover over a box
-          to see the date and, if something was going on, what the alert was.
+          Every day over the last 12 months, colored by what MBTA reported for this line. Tap or hover a
+          box to see the date and, if something was going on, what the alert was.
       </p>
       <div className="chart-block">
         <ServiceCalendar startDate={startDate} endDate={endDate} statusRanges={data.status_ranges} />
