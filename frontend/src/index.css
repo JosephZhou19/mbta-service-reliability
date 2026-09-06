@@ -451,6 +451,8 @@ h2 + .page-subtitle {
   z-index: 10;
   pointer-events: none;
   max-width: 260px;
+  max-height: 50vh;
+  overflow-y: auto;
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: 6px;

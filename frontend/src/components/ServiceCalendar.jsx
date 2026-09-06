@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { effectColor, effectLabel, EFFECT_DESCRIPTION } from '../lib/alertEffects'
 import { formatDate } from '../lib/format'
 
@@ -24,6 +24,34 @@ function fmt(d) {
 // TrendChart via lib/alertEffects.js.
 export default function ServiceCalendar({ startDate, endDate, statusRanges = [] }) {
   const [hover, setHover] = useState(null)
+  const containerRef = useRef(null)
+  const tooltipRef = useRef(null)
+
+  // The tooltip's initial position (tap point + offset) can push it past the edge
+  // of a narrow phone screen -- measure it after render and clamp it back into
+  // view, since its size varies with the reason text and can't be known up front.
+  // Vertically it only ever slides *up* to fit, never past this component's own
+  // top edge: a tap near the top of the grid with a long reason text used to flip
+  // the tooltip above the tap point without knowing what else was on the page,
+  // landing on top of the description text above the calendar entirely.
+  useLayoutEffect(() => {
+    const el = tooltipRef.current
+    const container = containerRef.current
+    if (!hover || !el || !container) return
+    const margin = 8
+    const { width, height } = el.getBoundingClientRect()
+    const containerTop = container.getBoundingClientRect().top
+
+    let left = hover.x + 14
+    if (left + width > window.innerWidth - margin) left = hover.x - width - 14
+    left = Math.min(Math.max(margin, left), window.innerWidth - width - margin)
+
+    let top = Math.min(hover.y + 14, window.innerHeight - height - margin)
+    top = Math.max(top, Math.max(margin, containerTop + margin))
+
+    el.style.left = `${left}px`
+    el.style.top = `${top}px`
+  }, [hover])
 
   const dayStatus = useMemo(() => {
     const m = new Map()
@@ -94,7 +122,7 @@ export default function ServiceCalendar({ startDate, endDate, statusRanges = [] 
   }
 
   return (
-    <div className="service-calendar" style={{ maxWidth: gridWidth }}>
+    <div ref={containerRef} className="service-calendar" style={{ maxWidth: gridWidth }}>
       <svg viewBox={`0 0 ${gridWidth} ${totalHeight}`} width="100%" className="service-calendar-grid">
         {monthLabels.map((m) => (
           <text key={m.weekIndex} x={m.weekIndex * (CELL + GAP)} y={MONTH_LABEL_HEIGHT - 5} className="calendar-month-label">
@@ -121,7 +149,7 @@ export default function ServiceCalendar({ startDate, endDate, statusRanges = [] 
         )}
       </svg>
       {hover && (
-        <div className="calendar-tooltip" style={{ left: hover.x + 14, top: hover.y + 14 }}>
+        <div ref={tooltipRef} className="calendar-tooltip" style={{ left: hover.x + 14, top: hover.y + 14 }}>
           <strong>{formatDate(hover.day.date)}</strong>
           {hover.day.status ? (
             <>
