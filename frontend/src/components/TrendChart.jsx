@@ -1,4 +1,4 @@
-import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend, ReferenceArea } from 'recharts'
+import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend, ReferenceArea, ReferenceLine, Brush } from 'recharts'
 import { formatDate } from '../lib/format'
 import { effectColor, MASKS_DELAY_DATA } from '../lib/alertEffects'
 
@@ -20,6 +20,13 @@ function robustDomain(data, dataKeys) {
   const hi = at(0.98)
   const pad = (hi - lo) * 0.12 || 60
   return [Math.floor(lo - pad), Math.ceil(hi + pad)]
+}
+
+// Pull 0 into view when it isn't a percentile outlier -- on-time vs. late only reads
+// clearly if the zero line is actually on the chart, not just implied off the bottom.
+function includeZero(domain) {
+  if (domain[0] === 'auto' || domain[1] === 'auto') return domain
+  return [Math.min(domain[0], 0), Math.max(domain[1], 0)]
 }
 
 // Numeric epoch, not a category-string axis: recharts' ReferenceArea silently fails
@@ -52,14 +59,19 @@ function maskUntrustworthyDates(data, statusRanges, dataKeys) {
 
 // statusRanges are shaded bands behind the delay lines, not a separate chart -- shows
 // at a glance whether a delay spike lines up with a real service alert.
-export default function TrendChart({ data, lines, yLabel, tooltipFormatter, domain, statusRanges = [] }) {
+//
+// The Brush below the chart is the zoom control: drag its handles to focus on a
+// narrower date range (a month, a week) without re-fetching -- all 12 months of data
+// stays loaded, the brush just changes which slice the chart above renders.
+export default function TrendChart({ data, lines, yLabel, tooltipFormatter, yTickFormatter, domain, statusRanges = [], zeroLine = false }) {
   const dataKeys = lines.map((l) => l.dataKey)
   const chartData = maskUntrustworthyDates(data, statusRanges, dataKeys).map((d) => ({ ...d, _t: toEpochDay(d.service_date) }))
-  const yDomain = domain ?? robustDomain(chartData, dataKeys)
+  const baseDomain = domain ?? robustDomain(chartData, dataKeys)
+  const yDomain = zeroLine ? includeZero(baseDomain) : baseDomain
 
   return (
-    <ResponsiveContainer width="100%" height={320}>
-      <LineChart data={chartData} margin={{ top: 8, right: 16, left: 8, bottom: 8 }}>
+    <ResponsiveContainer width="100%" height={400}>
+      <LineChart data={chartData} margin={{ top: 24, right: 16, left: 8, bottom: 8 }}>
         <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
         <XAxis
           dataKey="_t"
@@ -69,15 +81,25 @@ export default function TrendChart({ data, lines, yLabel, tooltipFormatter, doma
           minTickGap={40}
           stroke="var(--text-muted)"
         />
-        <YAxis stroke="var(--text-muted)" domain={yDomain} label={{ value: yLabel, angle: -90, position: 'insideLeft', fill: 'var(--text-muted)' }} />
+        <YAxis
+          stroke="var(--text-muted)"
+          domain={yDomain}
+          tickFormatter={yTickFormatter}
+          width={70}
+          label={{ value: yLabel, angle: -90, position: 'insideLeft', fill: 'var(--text-muted)', offset: -4 }}
+        />
         <Tooltip
           labelFormatter={(t) => formatDate(fromEpochDay(t))}
           formatter={tooltipFormatter}
           contentStyle={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 6 }}
         />
-        <Legend />
+        <Legend verticalAlign="top" height={32} />
+        {zeroLine && <ReferenceLine y={0} stroke="var(--text-muted)" strokeDasharray="4 4" />}
         {statusRanges.map((r) => (
-          <ReferenceArea key={`${r.start}-${r.effect}`} x1={toEpochDay(r.start)} x2={toEpochDay(r.end) + DAY_MS} fill={effectColor(r.effect)} fillOpacity={0.15} strokeOpacity={0} ifOverflow="visible" />
+          // "hidden" (not "visible"): a band whose range extends past the current
+          // zoomed-in window should crop cleanly at the edge, not draw unclipped and
+          // bleed past the chart's boundary.
+          <ReferenceArea key={`${r.start}-${r.effect}`} x1={toEpochDay(r.start)} x2={toEpochDay(r.end) + DAY_MS} fill={effectColor(r.effect)} fillOpacity={0.15} strokeOpacity={0} ifOverflow="hidden" />
         ))}
         {lines.map((l) => (
           <Line
@@ -91,6 +113,14 @@ export default function TrendChart({ data, lines, yLabel, tooltipFormatter, doma
             isAnimationActive={false}
           />
         ))}
+        <Brush
+          dataKey="_t"
+          height={26}
+          travellerWidth={8}
+          tickFormatter={(t) => formatDate(fromEpochDay(t))}
+          stroke="var(--text-muted)"
+          fill="var(--surface)"
+        />
       </LineChart>
     </ResponsiveContainer>
   )

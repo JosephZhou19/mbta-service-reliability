@@ -13,8 +13,8 @@ Restricted to the 9 lines and the 2023-01-01+ window this project covers, via
 predicate pushdown -- the source file is 130MB+ across every MBTA route, but
 filtering server-side keeps this to a ~15s fetch.
 
-Not restricted by `effect` type here: every alert is kept, and which effect types
-should influence a line's displayed status is a display-time concern (see
+Not restricted by `effect` type or scope here: every alert is kept, and which effect
+types/scopes should influence a line's displayed status is a display-time concern (see
 alert_status.py) so that policy can change without re-ingesting.
 
 Usage:
@@ -48,6 +48,7 @@ SOURCE_COLUMNS = [
     "active_period.end_datetime",
     "informed_entity.route_id",
     "informed_entity.direction_id",
+    "informed_entity.stop_id",
     "last_modified_datetime",
 ]
 
@@ -72,7 +73,12 @@ def fetch_and_dedupe() -> pd.DataFrame:
     # direction-specific) alert -- the default dropna=True would silently exclude
     # those rows from the transform below instead of grouping them together.
     latest_end = df.groupby(group_keys, dropna=False)["active_period.end_datetime"].transform("max")
-    df = df.assign(**{"active_period.end_datetime": latest_end})
+    # Distinct stops named across every snapshot of this occurrence -- a scope signal
+    # for alert_status.py to tell a single-station bypass (e.g. 2: a stop + its parent
+    # station id) from a real segment closure (dozens). 0 means no stop-level detail was
+    # ever given, i.e. the alert is scoped at the route/line level, not narrower.
+    n_stops = df.groupby(group_keys, dropna=False)["informed_entity.stop_id"].transform("nunique")
+    df = df.assign(**{"active_period.end_datetime": latest_end, "n_stops": n_stops})
     deduped = df.drop_duplicates(subset=group_keys, keep="last")
     return deduped.reset_index(drop=True)
 
@@ -90,7 +96,7 @@ def main() -> None:
         "informed_entity.route_id": "route_id",
         "informed_entity.direction_id": "direction_id",
     })
-    alerts = alerts[["id", "route_id", "direction_id", "effect", "cause", "header", "start", "end"]]
+    alerts = alerts[["id", "route_id", "direction_id", "effect", "cause", "header", "start", "end", "n_stops"]]
     alerts = alerts.sort_values(["route_id", "start"]).reset_index(drop=True)
 
     DATA_DIR.mkdir(parents=True, exist_ok=True)

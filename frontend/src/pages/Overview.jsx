@@ -1,30 +1,10 @@
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { fetchOverview } from '../lib/data'
-import { secToMin, durationMin, pct } from '../lib/format'
+import { secToMin, durationMin, pct, delayTone, availabilityTone } from '../lib/format'
 import { lineColor } from '../lib/lines'
 import LineBadge from '../components/LineBadge'
 import StatTile from '../components/StatTile'
-
-// Tone is still driven by the delay component, not the absolute trip length — a
-// naturally long line (Green-D, ~65 min) isn't "bad" for being long; what matters
-// is how much longer than scheduled it's actually running.
-function delayTone(sec) {
-  if (sec === null || sec === undefined) return 'neutral'
-  if (sec <= 60) return 'good'
-  if (sec <= 240) return 'warn'
-  return 'bad'
-}
-
-// availability_pct_last_year means "no MBTA alert of any kind was active," a strict
-// bar that puts real values in the 0-90% range rather than 85-99% -- thresholds scaled
-// accordingly so the page doesn't render every line as "bad."
-function availabilityTone(p) {
-  if (p === null || p === undefined) return 'neutral'
-  if (p >= 50) return 'good'
-  if (p >= 20) return 'warn'
-  return 'bad'
-}
 
 export default function Overview() {
   const [data, setData] = useState(null)
@@ -41,13 +21,14 @@ export default function Overview() {
     <div>
       <div className="page-header">
         <h1>System Overview</h1>
+        <p className="page-lede">
+          How reliable is the MBTA? This website summarizes the system's performance over the last year. 
+          Click on a line to see more details about its reliability, or click the leaderboard link to see which lines are least reliable.
+        </p>
         <p className="page-subtitle">
-          Delay is trailing {data.window_days} days, as of {data.as_of}. Trip time is a guesstimate
-          (typical scheduled length for the line + typical delay) — not a per-route answer, and not
-          available for a line mid-diversion long enough to still lack a normal-length day to measure
-          from. Availability is the trailing {Math.round(data.availability_window_days / 30.44)}-month
-          share of days MBTA had no active service alert for the line, of any kind — see a line's page
-          for what specifically happened on the rest.
+          The MBTA releases scheduled estimates of how long each trip should take. 
+          We compare those to the actual trip times, and summarize the results. 
+          The MBTA also releases service alerts when there are disruptions, and we track how often each line is affected by service disruptions.
         </p>
       </div>
 

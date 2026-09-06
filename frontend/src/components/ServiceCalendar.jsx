@@ -1,5 +1,6 @@
-import { useMemo } from 'react'
+import { useMemo, useState } from 'react'
 import { effectColor, effectLabel, EFFECT_DESCRIPTION } from '../lib/alertEffects'
+import { formatDate } from '../lib/format'
 
 const DAY_MS = 24 * 60 * 60 * 1000
 const CELL = 11
@@ -21,6 +22,8 @@ function fmt(d) {
 // winning MBTA alert effect plus a representative reason. Colors are shared with
 // TrendChart via lib/alertEffects.js.
 export default function ServiceCalendar({ startDate, endDate, statusRanges = [] }) {
+  const [hover, setHover] = useState(null)
+
   const dayStatus = useMemo(() => {
     const m = new Map()
     for (const r of statusRanges) {
@@ -80,12 +83,6 @@ export default function ServiceCalendar({ startDate, endDate, statusRanges = [] 
     return day.status ? 1 : 0.35
   }
 
-  function cellTitle(day) {
-    if (!day.inRange) return null
-    if (day.status) return `${day.date} — ${effectLabel(day.status.effect)}${day.status.reason ? `: ${day.status.reason}` : ''}`
-    return day.date
-  }
-
   return (
     <div className="service-calendar" style={{ width: gridWidth }}>
       <div className="service-calendar-months">
@@ -105,12 +102,26 @@ export default function ServiceCalendar({ startDate, endDate, statusRanges = [] 
               rx={2}
               fill={cellFill(day)}
               fillOpacity={cellOpacity(day)}
-            >
-              {day.inRange && <title>{cellTitle(day)}</title>}
-            </rect>
+              onMouseEnter={(e) => day.inRange && setHover({ x: e.clientX, y: e.clientY, day })}
+              onMouseMove={(e) => day.inRange && setHover({ x: e.clientX, y: e.clientY, day })}
+              onMouseLeave={() => setHover(null)}
+            />
           )),
         )}
       </svg>
+      {hover && (
+        <div className="calendar-tooltip" style={{ left: hover.x + 14, top: hover.y + 14 }}>
+          <strong>{formatDate(hover.day.date)}</strong>
+          {hover.day.status ? (
+            <>
+              <div>{effectLabel(hover.day.status.effect)}</div>
+              {hover.day.status.reason && <div className="calendar-tooltip-reason">{hover.day.status.reason}</div>}
+            </>
+          ) : (
+            <div>Normal service</div>
+          )}
+        </div>
+      )}
       <dl className="service-calendar-legend">
         <div className="legend-row">
           <dt><span className="legend-swatch" style={{ background: 'var(--good)', opacity: 0.35 }} />Normal</dt>

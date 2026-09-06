@@ -6,7 +6,7 @@ MBTA's own alerts are a direct, authoritative account of what happened, unlike
 inferring from indirect signals (a missing published stop, a collapsed observation
 count) with no explanation attached.
 
-Two filters decide which alerts are eligible to set a day's status:
+Three filters decide which alerts are eligible to set a day's status:
 
 1. EXCLUDED_EFFECTS: ACCESSIBILITY_ISSUE (overwhelmingly single-elevator/escalator
    outages, not train service) and ADDITIONAL_SERVICE (extra service, not a
@@ -18,6 +18,15 @@ Two filters decide which alerts are eligible to set a day's status:
    for OTHER_EFFECT (MBTA rarely uses SIGNIFICANT_DELAYS, so real delay incidents
    mostly land here, but 98% of it is a single disabled-train incident under 6 hours).
    A 12-hour cutoff sits cleanly in every category's gap.
+
+3. MIN_STOPS_AFFECTED: a long-duration NO_SERVICE alert can still mean "trains skip
+   this one stop" rather than "the line is down" -- e.g. a rolling series of
+   accessibility-upgrade bypasses (Jackson Square, then Englewood Ave, Summit Ave,
+   Brandon Hall...), each confirmed via informed_entity.stop_id to name exactly one
+   physical station, that would otherwise monopolize a whole line's status for months
+   via EFFECT_PRECEDENCE. Real segment/corridor closures name dozens of stops. n_stops
+   is 0 for an alert with no stop-level detail at all (scoped at the route/line level,
+   i.e. broad) -- only a nonzero count under the threshold counts as narrow.
 
 EFFECT_PRECEDENCE decides which alert wins a day's color when more than one eligible
 alert applies at once, ordered most-service-affecting first.
@@ -34,6 +43,7 @@ ALERTS_PATH = ROOT / "data" / "alerts.parquet"
 
 EXCLUDED_EFFECTS = {"ACCESSIBILITY_ISSUE", "ADDITIONAL_SERVICE"}
 MIN_DURATION_HOURS = 12
+MIN_STOPS_AFFECTED = 3  # below this (and > 0), treat as a narrow single-station bypass
 
 # A long-duration alert mentioning a parking lot or garage, but naming no line, is pure
 # facility noise, not a train-service issue (e.g. "Wollaston Parking Lot is partially
@@ -65,18 +75,20 @@ def load_alerts() -> pd.DataFrame:
 
 def eligible_alerts(alerts: pd.DataFrame) -> pd.DataFrame:
     """Alerts allowed to set a day's status: transport-relevant effect type, long
-    enough to represent more than a short-lived incident, and not pure parking/garage
-    facility noise. See module docstring for each filter's rationale."""
+    enough to represent more than a short-lived incident, broad enough to represent
+    more than one bypassed station, and not pure parking/garage facility noise. See
+    module docstring for each filter's rationale."""
     duration_hours = (alerts["end"] - alerts["start"]).dt.total_seconds() / 3600
     long_enough = duration_hours >= MIN_DURATION_HOURS
     right_effect = ~alerts["effect"].isin(EXCLUDED_EFFECTS)
+    narrow_scope = alerts["n_stops"].between(1, MIN_STOPS_AFFECTED - 1)
     mentions_facility = alerts["header"].str.contains(FACILITY_PATTERN, case=False, na=False)
     # Only a line mention in the opening clause counts: a line named later is usually
     # just a reason clause ("...to allow equipment to stage for Red Line track work"),
     # not a real service impact naming the line up front.
     mentions_line_early = alerts["header"].str.slice(0, 50).str.contains(LINE_NAME_PATTERN, case=False, na=False)
     pure_facility_noise = mentions_facility & ~mentions_line_early
-    return alerts[right_effect & long_enough & ~pure_facility_noise]
+    return alerts[right_effect & long_enough & ~narrow_scope & ~pure_facility_noise]
 
 
 def daily_status(alerts: pd.DataFrame, line: str, date_range: pd.DatetimeIndex) -> pd.DataFrame:
